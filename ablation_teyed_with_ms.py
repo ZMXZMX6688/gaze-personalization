@@ -37,17 +37,24 @@ from personalized_main_sequence import (
 )
 
 # ============================================================
-# 超参配置
+# 超参配置（可用环境变量覆盖，便于烟囱测试/迁移不同机器）
+#   GAZE_DATA_DIR  数据目录（默认 TEyeD 导出目录）
+#   GAZE_EPOCHS    总训练轮数
+#   GAZE_MAX_VIDEOS  仅用前 N 个视频（烟囱测试用；0=全部）
+#   GAZE_DEVICE    cuda:0 / cuda:1 ...
 # ============================================================
-DATA_DIR       = Path("/home/zmx/AR_Base_Data")
+DATA_DIR       = Path(os.environ.get(
+    "GAZE_DATA_DIR", "/home/luxliang/datasets/EXPORT_PUPIL_ALL"))
 IMG_SIZE       = 224        # 224匹配ResNet默认输入，略快于240
 CLIP_LEN       = 4          # 4帧足够捕捉时序信息
 FRAME_STRIDE   = 48         # 减少clip数量加速
 HIDDEN_SIZE    = 256
 LR             = 0.001
-BATCH_SIZE     = 16         # 增大batch提高GPU利用率
-TOTAL_EPOCHS   = 15
-STAGE1_EPOCHS  = 3
+BATCH_SIZE     = int(os.environ.get("GAZE_BATCH", 16))  # 增大batch提高GPU利用率
+TOTAL_EPOCHS   = int(os.environ.get("GAZE_EPOCHS", 15))
+STAGE1_EPOCHS  = min(3, TOTAL_EPOCHS)
+MAX_VIDEOS     = int(os.environ.get("GAZE_MAX_VIDEOS", 0))  # 0=全部
+DEVICE_STR     = os.environ.get("GAZE_DEVICE", "cuda:0")
 FPS            = 60.0 / FRAME_STRIDE * 4   # 实际等效帧率 ≈ 7.5fps
 
 # 原有生物约束权重
@@ -254,7 +261,7 @@ def estimate_population_params_from_data(sids, max_videos=5):
 # ============================================================
 def train_model(use_ms_constraint=True):
     seed_everything()
-    device = torch.device('cuda:0')
+    device = torch.device(DEVICE_STR if torch.cuda.is_available() else 'cpu')
 
     # 获取所有视频SID
     all_sids = []
@@ -263,6 +270,9 @@ def train_model(use_ms_constraint=True):
         if (DATA_DIR / f"{sid}.mp4pupil_seg_3D.mp4").exists():
             all_sids.append(sid)
     all_sids.sort()
+    if MAX_VIDEOS > 0:
+        all_sids = all_sids[:MAX_VIDEOS]
+        print(f"[烟囱测试] 仅使用前 {len(all_sids)} 个视频")
     n = len(all_sids)
     train_sids = all_sids[:int(n * 0.70)]
     val_sids   = all_sids[int(n * 0.70):int(n * 0.85)]
@@ -321,12 +331,14 @@ def train_model(use_ms_constraint=True):
             loss = F.mse_loss(preds, gazes)
 
             if use_ms_constraint:
-                # 用PersonalizedGazeLoss（内含角度约束+MS约束）
-                # gru_out: [B, T, HIDDEN_SIZE] -> 需要投影到3D注视向量空间
-                # 简化：用最后帧预测代替序列，主要利用MS的时序约束
+                # ⚠ 已知局限（见 FINDINGS.md）：本 ablation 的采样几何下 MS 时序约束无效。
+                #   1) clip 内 4 帧间隔 = FRAME_STRIDE/60 ≈ 0.8s，而 saccade 仅 20-80ms，
+                #      完全落在采样间隙内 → 伪序列的"角速度/时长"是 0.8s 尺度的粗位移，
+                #      并非 saccade 动态，MS 期望值无从匹配。
+                #   2) pseudo_seq 在 no_grad 下计算 → ms 项对模型参数梯度恒为 0（no-op）。
+                #   保留 no_grad 是刻意的：此采样率下启用梯度只会注入无意义信号。
+                #   若要真正启用 MS 训练约束，需 ≥120fps 密集子窗口 + relative=True 归一化损失。
                 with torch.no_grad():
-                    # 从GRU序列生成伪注视序列（用于MS约束计算）
-                    # [B, T, HIDDEN_SIZE] -> [B, T, 3]
                     pseudo_seq = model.head(gru_out)                    # [B, T, 3]
                     pseudo_seq = F.normalize(pseudo_seq, dim=-1)
 
@@ -335,7 +347,7 @@ def train_model(use_ms_constraint=True):
                     target=gazes,
                     gaze_seq=pseudo_seq,
                 )
-                # 只加角度约束和MS约束，不重复加MSE
+                # 实际生效的仅 bio 角度约束（依赖 preds，有梯度）；ms 项为常数(见上)
                 loss = loss + ms_result['bio'] + ms_result['ms']
             else:
                 # 原有角度约束
