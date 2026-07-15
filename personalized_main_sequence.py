@@ -48,7 +48,8 @@ class SaccadeDetector:
                  min_duration_ms: float = 20.0,
                  max_duration_ms: float = 200.0,
                  min_amplitude_deg: float = 1.0,
-                 max_amplitude_deg: float = 30.0):
+                 max_amplitude_deg: float = 30.0,
+                 max_peak_velocity: float = 1000.0):  # °/s，拒绝眨眼/丢帧伪影
         self.fps = fps
         self.dt = 1000.0 / fps            # ms per frame
         self.v_thresh = velocity_threshold
@@ -56,6 +57,8 @@ class SaccadeDetector:
         self.max_dur = max_duration_ms
         self.min_amp = min_amplitude_deg
         self.max_amp = max_amplitude_deg
+        # 生理上限：真实saccade峰速≈500-700°/s；>1000°/s多为眨眼/跟踪丢失的单帧跳变
+        self.max_peak_vel = max_peak_velocity
 
     def angular_velocity(self, gaze_seq: np.ndarray) -> np.ndarray:
         """
@@ -67,6 +70,33 @@ class SaccadeDetector:
         cos_sim = np.clip(np.sum(g[:-1] * g[1:], axis=1), -1.0, 1.0)
         angle_diff = np.degrees(np.arccos(cos_sim))      # 度/帧
         return angle_diff / self.dt * 1000.0              # 度/秒
+
+    def _finalize(self, gaze_seq: np.ndarray, vel: np.ndarray,
+                  saccade_start: int, saccade_end: int,
+                  saccades: List[Dict]) -> None:
+        """校验一个候选saccade并（若合格）追加到列表。
+        saccade_end 是速度低于阈值的帧索引（帧 saccade_end 已到位）。"""
+        dur = (saccade_end - saccade_start) * self.dt
+        if not (self.min_dur <= dur <= self.max_dur):
+            return
+        g_start = gaze_seq[saccade_start]
+        g_end   = gaze_seq[min(saccade_end, len(gaze_seq) - 1)]
+        g_start = g_start / (np.linalg.norm(g_start) + 1e-8)
+        g_end   = g_end   / (np.linalg.norm(g_end)   + 1e-8)
+        cos_a = np.clip(np.dot(g_start, g_end), -1.0, 1.0)
+        amp = np.degrees(np.arccos(cos_a))
+        # 峰值速度取运动区间 [start, end) 的速度（vel[i] 是帧 i→i+1 的速度）
+        v_peak = float(np.max(vel[saccade_start:max(saccade_end, saccade_start + 1)]))
+        if v_peak > self.max_peak_vel:          # 眨眼/丢帧伪影：拒绝
+            return
+        if self.min_amp <= amp <= self.max_amp:
+            saccades.append({
+                'amplitude':     amp,
+                'duration':      dur,
+                'peak_velocity': v_peak,
+                'start_frame':   saccade_start,
+                'end_frame':     saccade_end,
+            })
 
     def detect(self, gaze_seq: np.ndarray) -> List[Dict]:
         """
@@ -80,7 +110,7 @@ class SaccadeDetector:
         vel = self.angular_velocity(gaze_seq)
         in_saccade = False
         saccade_start = 0
-        saccades = []
+        saccades: List[Dict] = []
 
         for i, v in enumerate(vel):
             if not in_saccade and v > self.v_thresh:
@@ -88,26 +118,12 @@ class SaccadeDetector:
                 saccade_start = i
             elif in_saccade and v <= self.v_thresh:
                 in_saccade = False
-                saccade_end = i
-                dur = (saccade_end - saccade_start) * self.dt
+                self._finalize(gaze_seq, vel, saccade_start, i, saccades)
 
-                if self.min_dur <= dur <= self.max_dur:
-                    g_start = gaze_seq[saccade_start]
-                    g_end   = gaze_seq[min(saccade_end, len(gaze_seq) - 1)]
-                    g_start = g_start / (np.linalg.norm(g_start) + 1e-8)
-                    g_end   = g_end   / (np.linalg.norm(g_end)   + 1e-8)
-                    cos_a = np.clip(np.dot(g_start, g_end), -1.0, 1.0)
-                    amp = np.degrees(np.arccos(cos_a))
-                    v_peak = float(np.max(vel[saccade_start:saccade_end + 1]))
+        # 序列结束时仍在saccade中：flush最后一个（否则末尾眼跳被静默丢弃）
+        if in_saccade:
+            self._finalize(gaze_seq, vel, saccade_start, len(vel), saccades)
 
-                    if self.min_amp <= amp <= self.max_amp:
-                        saccades.append({
-                            'amplitude':    amp,
-                            'duration':     dur,
-                            'peak_velocity': v_peak,
-                            'start_frame':  saccade_start,
-                            'end_frame':    saccade_end,
-                        })
         return saccades
 
 
@@ -194,30 +210,50 @@ class MainSequenceCalibrator:
 # ============================================================
 class RLSMainSequence:
     """
-    递归最小二乘在线更新 Main Sequence 参数（持续时间-幅度关系）
-    状态向量 θ = [a_i, k_i]
+    指数加权递归最小二乘在线更新 Main Sequence 参数（持续时间-幅度关系）
+    状态向量 θ = [a_i, k_i]，模型 D = a_i + k_i·A
+
+    数值形式（带遗忘因子 λ 与观测噪声 R 的一致 EW-RLS）：
+        S = λ·R + xᵀP x
+        K = P x / S
+        θ ← θ + K·(D − xᵀθ)
+        P ← (P − K xᵀP) / λ
+
+    默认 λ=1.0 —— 对参数平稳的用户，等价于递归最小二乘，收敛到批量 OLS 解
+    （无偏）。λ<1 时开启遗忘以跟踪漂移；此时用 p_trace_max 对协方差做
+    anti-windup 约束，避免协方差爆炸导致的估计跳变/漂移偏差。
     """
 
     def __init__(self,
                  a_init: float = POPULATION_PRIOR['a_i'],
                  k_init: float = POPULATION_PRIOR['k_i'],
-                 lambda_forget: float = 0.98,
-                 P_init: float = 1.0):   # 缩小初始不确定性，避免早期过度更新
+                 lambda_forget: float = 1.0,   # 1.0=平稳(收敛OLS); <1 跟踪漂移
+                 P_init: float = 1.0,          # 先验协方差：越小→越向群体先验收缩
+                 obs_noise: float = 5.0,        # 观测噪声std(ms)；偏大→正则化弱识别的截距
+                 p_trace_max: float = 50.0):   # anti-windup: 协方差迹上界
         self.theta = np.array([a_init, k_init], dtype=np.float64)
         self.P = np.eye(2) * P_init
         self.lambda_ = lambda_forget
+        self.R = float(obs_noise) ** 2
+        self.p_trace_max = p_trace_max
         self.n_updates = 0
 
     def update(self, amplitude: float, duration: float) -> Dict:
         x = np.array([1.0, amplitude])
-        y_pred = x @ self.theta
-        innovation = duration - y_pred
+        Px = self.P @ x
+        innovation = duration - x @ self.theta
 
-        S = float(x @ self.P @ x.T) + 1.0
-        K = self.P @ x.T / S
+        S = self.lambda_ * self.R + float(x @ Px)
+        K = Px / S
 
         self.theta = self.theta + K * innovation
-        self.P = (self.P - np.outer(K, x) @ self.P) / self.lambda_
+        self.P = (self.P - np.outer(K, Px)) / self.lambda_
+
+        # 数值卫生 + anti-windup（仅在 λ<1 时协方差才会增长）
+        self.P = (self.P + self.P.T) / 2.0
+        tr = np.trace(self.P)
+        if tr > self.p_trace_max:
+            self.P *= self.p_trace_max / tr
 
         # 生理约束
         self.theta[0] = np.clip(self.theta[0], *PARAM_BOUNDS['a_i'])
@@ -295,7 +331,7 @@ class UserMainSequenceBank:
     """
 
     def __init__(self, updater_type: str = 'rls',
-                 lambda_forget: float = 0.98):
+                 lambda_forget: float = 1.0):
         self.updater_type = updater_type
         self.lambda_forget = lambda_forget
         self.users: Dict[str, object] = {}
@@ -362,11 +398,16 @@ class MainSequenceConstraintLoss(nn.Module):
                  personalized_params: Optional[Dict] = None,
                  w_duration: float = 1.0,
                  w_vpeak: float = 0.1,
-                 w_saturation: float = 10.0):
+                 w_saturation: float = 10.0,
+                 relative: bool = False):
         super().__init__()
         p = personalized_params or POPULATION_PRIOR
         self.fps = fps
         self.dt_s = 1.0 / fps
+        # relative=True: 用无量纲相对误差替代 ms²/（°/s）² 的绝对 MSE，
+        # 使 MS 项与主 MSE(≈1e-3) 量纲可比，避免作为训练损失时压制主损失。
+        # 高帧率(≥120fps)可分辨saccade动态时才建议开启作训练约束。
+        self.relative = relative
 
         self.register_buffer('a',   torch.tensor(p.get('a_i',   POPULATION_PRIOR['a_i']),   dtype=torch.float32))
         self.register_buffer('k',   torch.tensor(p.get('k_i',   POPULATION_PRIOR['k_i']),   dtype=torch.float32))
@@ -420,8 +461,15 @@ class MainSequenceConstraintLoss(nn.Module):
         expected_vpeak = self.V0 * (1 - torch.exp(-amplitudes / self.tau)) # [B]
 
         # 损失计算
-        duration_loss     = F.mse_loss(durations, expected_dur)
-        vpeak_loss        = F.smooth_l1_loss(v_peak, expected_vpeak, beta=50.0)
+        if self.relative:
+            # 无量纲相对误差：(pred/expected - 1)²，量纲与主 MSE 可比
+            duration_loss = F.mse_loss(durations / (expected_dur + 1e-6),
+                                       torch.ones_like(durations))
+            vpeak_loss    = F.mse_loss(v_peak / (expected_vpeak + 1e-6),
+                                       torch.ones_like(v_peak))
+        else:
+            duration_loss = F.mse_loss(durations, expected_dur)
+            vpeak_loss    = F.smooth_l1_loss(v_peak, expected_vpeak, beta=50.0)
         saturation_penalty = torch.relu(v_peak - self.V0).mean()
 
         total = (self.w_duration   * duration_loss
@@ -732,20 +780,28 @@ if __name__ == '__main__':
     # --------------------------------------------------------
     print("\n[测试6] SaccadeDetector自动检测")
     detector = SaccadeDetector(fps=60.0)
-    # 构造含3个saccade的序列
+    # 每个saccade：从中心快速外跳(6帧)→短暂保持→缓慢回中(30帧，速度<阈值不计)
+    # 这样每个都是独立的、可从中心测量幅度的center-out saccade
     T_total = 300
-    gaze_gt = np.tile([0.0, 0.0, 1.0], (T_total, 1)).astype(np.float64)
-    # 60FPS下，saccade持续8帧 ≈ 133ms（在20-200ms范围内）
-    for sac_start, amp in [(50, 10), (130, 15), (210, 8)]:
+    center = np.array([0.0, 0.0, 1.0])
+    gaze_gt = np.tile(center, (T_total, 1)).astype(np.float64)
+    injected = [(40, 10), (140, 15), (230, 8)]
+    for sac_start, amp in injected:
         end = np.array([np.sin(np.radians(amp)), 0, np.cos(np.radians(amp))])
-        for t in range(8):   # 8帧 ≈ 133ms
-            alpha = t / 7
-            v = (1-alpha)*gaze_gt[sac_start] + alpha*end
-            gaze_gt[sac_start+t] = v / np.linalg.norm(v)
-        gaze_gt[sac_start+8:] = gaze_gt[sac_start+7]
+        for t in range(6):                       # 6帧快速外跳 ≈ 83ms
+            alpha = t / 5
+            v = (1 - alpha) * center + alpha * end
+            gaze_gt[sac_start + t] = v / np.linalg.norm(v)
+        for t in range(6, 16):                    # 保持在目标位
+            gaze_gt[sac_start + t] = end
+        for t in range(30):                       # 30帧缓慢回中(~<50°/s→不计为saccade)
+            alpha = t / 29
+            v = (1 - alpha) * end + alpha * center
+            gaze_gt[sac_start + 16 + t] = v / np.linalg.norm(v)
 
     detected = detector.detect(gaze_gt)
-    print(f"  注入3个saccade，检测到 {len(detected)} 个")
+    ok = len(detected) == len(injected)
+    print(f"  注入{len(injected)}个saccade，检测到 {len(detected)} 个 → {'[OK]' if ok else '[FAIL]'}")
     for i, s in enumerate(detected):
         print(f"    #{i+1}: A={s['amplitude']:.1f}°, D={s['duration']:.1f}ms, Vp={s['peak_velocity']:.1f}°/s")
 
