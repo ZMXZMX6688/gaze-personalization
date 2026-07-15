@@ -4,6 +4,9 @@
 个性化Main Sequence端到端测试
 演示完整流程：用户序列 -> 检测saccade -> 标定参数 -> 在线更新 -> 训练/推理集成
 """
+# This is an executable demo, not a pytest module.
+__test__ = False
+
 import numpy as np
 import torch
 import torch.nn.functional as F

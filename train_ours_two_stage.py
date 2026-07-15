@@ -186,9 +186,11 @@ class ResNet18GRUModel(nn.Module):
         num_subjects: 训练受试者总数（personalize 时需要）
     """
     def __init__(self, feat_dim: int = 512, hidden: int = 256, dropout: float = 0.3,
-                 personalize_mode: str = 'none', num_subjects: int = 0):
+                 personalize_mode: str = 'none', num_subjects: int = 0,
+                 pretrained_backbone: bool = True):
         super().__init__()
-        backbone = resnet18(weights=ResNet18_Weights.DEFAULT)
+        weights = ResNet18_Weights.DEFAULT if pretrained_backbone else None
+        backbone = resnet18(weights=weights)
         self.backbone = nn.Sequential(*list(backbone.children())[:-1])
         self.feat_drop = nn.Dropout(dropout)
         self.feat_dim = feat_dim
@@ -206,15 +208,9 @@ class ResNet18GRUModel(nn.Module):
         if personalize_mode != 'none' and num_subjects > 0:
             self.subject_embed = SubjectEmbedding(num_subjects, feat_dim=feat_dim, hidden=hidden)
 
-    def forward(self, x):
-        """仅返回最后一帧预测 (B, 3)"""
-        B, T, C, H, W = x.shape
-        x = x.reshape(B * T, C, H, W).contiguous()
-        f = self.backbone(x)
-        f = self.feat_drop(f.flatten(1))
-        f = f.reshape(B, T, -1)
-        out, _ = self.gru(f)
-        return self.head(out[:, -1])
+    def forward(self, x, subject_idx=None):
+        """Return the final prediction, including personalization when supplied."""
+        return self.forward_all(x, subject_idx=subject_idx)[:, -1]
 
     def forward_all(self, x, use_cache_aug=False, subject_idx=None):
         """返回整个序列的预测 (B, T, 3)
@@ -460,12 +456,17 @@ class TEyeDSeqDataset(Dataset):
                 ok_starts = []
                 for s in starts:
                     idxs = np.arange(s, s + need_frames, stride, dtype=np.int64)
-                    if idxs.max() < len(valid) and np.all(valid[idxs] == 1):
+                    if idxs.max() >= len(valid):
+                        continue
+                    if (not self.require_all_valid or
+                            np.all(valid[s:s + need_frames] == 1)):
                         ok_starts.append(s)
                 if not ok_starts:
                     continue
                 k = min(max_clips_per_segment, len(ok_starts))
-                for s in ok_starts[:k]:
+                positions = np.linspace(0, len(ok_starts) - 1, k, dtype=np.int64)
+                for position in positions:
+                    s = ok_starts[int(position)]
                     self.items.append((sid, int(s)))
 
             self.meta[sid] = {
@@ -562,6 +563,14 @@ class EMA:
             if param.requires_grad:
                 param.data = self.backup[name]
 
+    def state_dict(self, model):
+        """Build a complete model state dict with EMA parameters and live buffers."""
+        state = {name: value.detach().clone()
+                 for name, value in model.state_dict().items()}
+        for name, value in self.shadow.items():
+            state[name] = value.detach().clone()
+        return state
+
 
 # =====================================================================
 # Subject Embedding 个性化
@@ -575,11 +584,18 @@ class SubjectEmbedding(nn.Module):
     def __init__(self, num_subjects: int, embed_dim: int = 16, feat_dim: int = 512,
                  hidden: int = 256, num_layers: int = 2):
         super().__init__()
+        self.hidden = hidden
+        self.num_layers = num_layers
         self.embedding = nn.Embedding(num_subjects, embed_dim)
         # 特征缩放投影 (for feat_scale)
         self.feat_proj = nn.Linear(embed_dim, feat_dim)
         # GRU 隐状态初始化投影 (for hidden_init)
         self.hidden_proj = nn.Linear(embed_dim, hidden * num_layers)
+        # A new subject must initially reproduce the universal model exactly.
+        nn.init.zeros_(self.feat_proj.weight)
+        nn.init.zeros_(self.feat_proj.bias)
+        nn.init.zeros_(self.hidden_proj.weight)
+        nn.init.zeros_(self.hidden_proj.bias)
 
     def forward_feat_scale(self, subject_idx):
         """返回特征缩放因子 (B, 1, 512)"""
@@ -591,7 +607,9 @@ class SubjectEmbedding(nn.Module):
         """返回 GRU 初始隐状态 (num_layers, B, hidden)"""
         emb = self.embedding(subject_idx)  # (B, 16)
         h0 = self.hidden_proj(emb)         # (B, 512)
-        return h0.reshape(2, batch_size, -1).contiguous()  # (2, B, 256)
+        # Projected values are laid out per subject, then per GRU layer.
+        return (h0.reshape(batch_size, self.num_layers, self.hidden)
+                .permute(1, 0, 2).contiguous())
 
     def zero_scale(self, batch_size, dim, device):
         """未见受试者使用零调制（scale=1）"""
@@ -606,7 +624,8 @@ class SubjectEmbedding(nn.Module):
 # 二阶段训练函数（严格按论文）
 # =====================================================================
 def train_two_stage(
-    data_dir: str = "/home/zmx/AR_Base_Data",
+    data_dir: str = os.environ.get(
+        "EYE_DATA_DIR", "/home/luxliang/datasets/EXPORT_PUPIL_ALL"),
     clip_len: int = 8,
     stride: int = 4,
     img_size: int = 240,
@@ -618,7 +637,8 @@ def train_two_stage(
     early_stop_patience: int = 10,
     augment: bool = True,
     seed: int = 42,
-    personalize_mode: str = 'none'
+    personalize_mode: str = 'none',
+    output_dir: Optional[str] = None
 ):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     random.seed(seed)
@@ -627,7 +647,9 @@ def train_two_stage(
 
     effective_fps = EYE_CLIP_FPS / stride
     fps_tag = int(round(effective_fps))
-    output_dir = Path(f"./ResNet18-GRU-Biophysical-{img_size}x{img_size}-{fps_tag}fps-two-stage")
+    output_dir = (Path(output_dir) if output_dir else
+                  Path("checkpoints") /
+                  f"ResNet18-GRU-Biophysical-{img_size}x{img_size}-{fps_tag}fps-{personalize_mode}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     lambda_c1_stage1 = 0.1
@@ -673,8 +695,10 @@ def train_two_stage(
     # 数据集（返回全序列 GT）
     ds_kw = dict(
         clip_len=clip_len, stride=stride, img_size=img_size,
-        z_thresh=10.0, min_gap=300, segment_min_len=200,
-        max_segments_per_video=60, max_clips_per_segment=80,
+        z_thresh=10.0, min_gap=300,
+        segment_min_len=int(os.environ.get("EYE_SEG_MIN_LEN", "120")),
+        max_segments_per_video=60,
+        max_clips_per_segment=int(os.environ.get("EYE_MAX_CLIPS_PER_SEG", "15")),
         require_all_valid=True, seed=seed
     )
     ds_train = TEyeDSeqDataset(data_dir, train_sids, augment=augment, sid_to_idx=sid_to_idx, **ds_kw)
@@ -783,7 +807,7 @@ def train_two_stage(
         if val_mean < best_val:
             best_val = val_mean
             no_improve = 0
-            torch.save(model.state_dict(), best_path_stage1)
+            torch.save(ema.state_dict(model), best_path_stage1)
             mark = " ★"
         else:
             no_improve += 1
@@ -813,7 +837,6 @@ def train_two_stage(
 
     best_val2 = float('inf')
     best_path_stage2 = output_dir / "resnet18_gru_bio_two_stage_best.pt"
-    best_ema_path_stage2 = output_dir / "resnet18_gru_bio_two_stage_best_ema.pt"
     no_improve2 = 0
 
     s2_total_batches = len(tr_loader)
@@ -883,7 +906,7 @@ def train_two_stage(
         if val_mean < best_val2:
             best_val2 = val_mean
             no_improve2 = 0
-            torch.save(model.state_dict(), best_path_stage2)
+            torch.save(ema.state_dict(model), best_path_stage2)
             mark = " ★"
         else:
             no_improve2 += 1
@@ -938,6 +961,7 @@ def train_two_stage(
     write_header = not csv_path.exists()
     with open(csv_path, 'a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['timestamp', 'experiment', 'model_variant',
+                                               'personalize_mode',
                                                'clip_len', 'stride', 'img_size',
                                                'stage1_best', 'stage2_best',
                                                'test_mean', 'test_median', 'test_p90',
@@ -949,6 +973,7 @@ def train_two_stage(
             'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'experiment': f'{img_size}x{img_size}_{fps_tag}fps',
             'model_variant': 'resnet18_gru_bio_two_stage',
+            'personalize_mode': personalize_mode,
             'clip_len': clip_len,
             'stride': stride,
             'img_size': img_size,
@@ -981,7 +1006,8 @@ def train_two_stage(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="ResNet-18 + GRU + Biophysical constraints - two-stage training")
-    parser.add_argument("--data_dir", type=str, default="/home/zmx/AR_Base_Data")
+    parser.add_argument("--data_dir", type=str, default=os.environ.get(
+        "EYE_DATA_DIR", "/home/luxliang/datasets/EXPORT_PUPIL_ALL"))
     parser.add_argument("--clip_len", type=int, default=8)
     parser.add_argument("--stride", type=int, default=4)
     parser.add_argument("--img_size", type=int, default=240)
@@ -995,6 +1021,8 @@ if __name__ == "__main__":
     parser.add_argument("--personalize-mode", type=str, default='none',
                         choices=['none', 'feat_scale', 'hidden_init'],
                         help="个性化模式: none | feat_scale | hidden_init")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="输出目录；默认按个性化模式隔离到 checkpoints/")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -1011,5 +1039,6 @@ if __name__ == "__main__":
         lr=args.lr,
         weight_decay=args.weight_decay,
         early_stop_patience=args.early_stop_patience,
-        seed=args.seed
+        seed=args.seed,
+        output_dir=args.output_dir
     )

@@ -1,5 +1,50 @@
 # 迭代与优化findings（2026-07-07）
 
+## 2026-07-15：普适模型到未见用户的个性化审计
+
+- 原 `train_ours_two_stage.py` 只在训练批次的 `forward_all(subject_idx=...)`
+  中使用 subject embedding，验证/测试调用的 `forward()` 会绕开 embedding，且没有为
+  未见测试用户建立 calibration 参数。因此该流程不是未见用户个性化评测。
+- `hidden_init` 原先直接把 `(B, 2H)` reshape 为 `(2, B, H)`，会在 batch size > 1
+  时混合受试者和 GRU 层。现已改为先 reshape `(B, 2, H)` 再 permute。
+- 新增 `personalize_from_universal.py`：严格加载并冻结普适 checkpoint，仅用与评测
+  segment 不相交的标注 clip 拟合每用户 2 参数 yaw/pitch 偏置。
+- 本地 56-SID 数据的原始 segment 中位长度为 356 帧。`segment_min_len=600` 会令
+  验证/测试集为空；恢复为 `segment_min_len=120`、每段 15 个 clip 后得到
+  36,363/4,500/5,400，验证和测试数量与历史日志完全一致。
+- 收敛普适模型的 768-clip 探针中 C1/C2/C3 全部分支激活率为 0。初始化探针中仅
+  C1 elevation 与 C2 激活，C3/flip/spherical/hinge 均为 0；现有约束消融也未显示收益。
+
+正式个性化指标必须逐 SID 报告，并以未适配普适输出作为同一批 evaluation clip 上的
+配对基线；不能把 calibration clip 混入 evaluation，也不能只报告 clip 加权总体均值。
+
+### 未见用户个性化结果
+
+冻结 checkpoint：`resnet18_gru_bio_two_stage_best.pt`，SHA-256
+`be2c9951c02543f262d3413c9e170b303592e47922e607af5444893ca8376564`。测试集为普适模型
+固定的 6 个 held-out SID，每人 50 个 calibration-pool clips；adapter 仅有 yaw/pitch
+两个参数，并在 calibration 内部验证后选择 0/0.25/0.5/0.75/1.0 缩放，证据不足时回退
+到零偏置。
+
+严格 `chronological` pilot（每人 150 个 evaluation clips）在 K=50 时由 1.2076° 变为
+1.2121°，宏平均下降 0.0045°。这说明记录开头的少量校准不能稳定外推到后续时段，不能
+把该协议宣称为有效个性化。
+
+`interleaved` session-wide 协议把 calibration segments 均匀分布到整段记录，并排除每个
+calibration segment 及其前后一个相邻 segment。完整评测每人 750 个 clips，segment/frame
+严格隔离，结果如下：
+
+| K | universal macro mean | personalized macro mean | improvement | subject win rate |
+|---:|---:|---:|---:|---:|
+| 5 | 1.2076° | 1.1800° | 0.0276° | 2/6 |
+| 10 | 1.2076° | 1.1916° | 0.0160° | 1/6 |
+| 20 | 1.2076° | **1.1543°** | **0.0533°** | 3/6 |
+| 50 | 1.2076° | 1.1618° | 0.0458° | 3/6 |
+
+其余用户由 calibration-validation 门控回退到普适输出，没有实质负迁移。该正结果支持
+“一次 session 内分散校准”，不等价于对未来时段的跨时间泛化。完整产物位于服务器
+`~/gaze-personalization/runs/personalization-interleaved-full-20260715/`。
+
 在服务器 `luxliang@192.168.1.85`（8× RTX 4090, `pytorch_env`: torch 2.4.1+cu121）
 上对本仓库做了一轮系统的迭代、修复与实验验证。以下为结论与证据。
 
