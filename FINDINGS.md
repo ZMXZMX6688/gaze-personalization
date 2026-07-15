@@ -76,9 +76,27 @@ saccade，但 **duration–amplitude 拟合 R²=0.0–0.13**，a/V0 顶到参数
 
 ---
 
+## 二·补：误差尾部 = GT 眨眼/跟踪丢失伪影（这才是能降 mean 的方向）
+
+对密集逐帧预测按 `*validity_pupil.txt` 拆分误差（`eval_tail.py`）：
+
+| 视频 | raw mean | **valid-only mean** | invalid-only mean | invalid 占比 | top-5%误差中invalid占比 |
+|---|---|---|---|---|---|
+| AR_36 | 7.14° | **2.41°** | 126.1° | 3.8% | **76.5%** |
+| AR_39 | 2.03° | 2.03° | — | 0.0% | 0% |
+| 聚合 | 4.59° | **2.22°** | — | 1.9% | — |
+
+- **模型在有效帧上的真实误差 ≈ 2.2° mean**，raw ~4.6° 被 GT 伪影**放大约 2×**。
+  任何密集逐帧 benchmark 不过滤 `validity==1` 都会高估误差约一倍。
+  （仓库 ablation 建 clip 时已要求整窗 validity==1，故其报告数已是干净的；差异只出现在无过滤的密集评测。）
+- **这正解释了 MS 验证为何无效**：它瞄准的误差尾部 76% 是坏标签，非任何约束能修的模型误差。
+- 运行时（无 GT）用 prediction-jump 作弃权信号只召回 13–17% 的无效帧（GRU 平滑掉了眨眼），
+  故正确做法是用 validity 标志过滤评测，而非基于预测的置信度。
+
 ## 三、可复现脚本（服务器 `~/gaze-personalization/`）
 - `diag.py`：RLS 配置扫描 + 检测器合成验证
 - `det_diag.py`：真实数据速度分布 / saccade 计数 vs 阈值
 - `calib_check.py`：调优检测器的真实数据标定（看是否顶界）
 - `config_id.py`：由角误差识别 checkpoint 训练配置
 - `eval_verify.py`：密集推理 + MS 验证对比（`GAZE_SIDS/WLEN/NVID/W0` 可配）
+- `eval_tail.py`：误差尾部按 validity 拆分（valid-only vs 伪影）+ 运行时弃权信号评估
