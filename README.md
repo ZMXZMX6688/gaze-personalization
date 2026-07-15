@@ -4,6 +4,32 @@ Personalization for appearance-based 3D gaze estimation. The supported TEyeD
 workflow starts from a frozen, subject-independent ResNet18-GRU checkpoint and
 fits a two-parameter yaw/pitch bias for each previously unseen subject.
 
+## Latest TEyeD result
+
+The current result uses the universal model's six held-out subjects. For each
+subject, 50 calibration-pool clips are reserved and 750 non-overlapping clips
+are evaluated. Calibration and evaluation never share a segment or source
+frame, and a calibration-validation gate falls back to the universal prediction
+when an adapter has insufficient evidence of improvement.
+
+| Calibration clips (K) | Universal macro mean | Personalized macro mean | Improvement | Subject wins |
+|---:|---:|---:|---:|---:|
+| 5 | 1.2076 deg | 1.1800 deg | 0.0276 deg | 2/6 |
+| 10 | 1.2076 deg | 1.1916 deg | 0.0160 deg | 1/6 |
+| **20** | **1.2076 deg** | **1.1543 deg** | **0.0533 deg (4.4%)** | **3/6** |
+| 50 | 1.2076 deg | 1.1618 deg | 0.0458 deg | 3/6 |
+
+`K=20` is the current recommended operating point. These results use the
+`interleaved` session-wide protocol: calibration segments are distributed over
+the recording and their neighboring segments are excluded from evaluation.
+They demonstrate within-session personalization, not future-session or
+strictly later-time generalization.
+
+The harder `chronological` pilot uses only early segments for calibration. At
+`K=50`, it changed the macro mean from 1.2076 deg to 1.2121 deg (-0.0045 deg),
+so no positive temporal-generalization claim is made. See `FINDINGS.md` for the
+full audit and negative-result analysis.
+
 ## Recommended workflow
 
 `personalize_from_universal.py` enforces the evaluation boundary explicitly:
@@ -21,11 +47,12 @@ export these settings reproduce the historical validation/test counts of
 4,500/5,400 clips.
 
 ```bash
-python personalize_from_universal.py \
+python3 personalize_from_universal.py \
   --data-dir /path/to/EXPORT_PUPIL_ALL \
   --checkpoint /path/to/resnet18_gru_bio_two_stage_best.pt \
   --device cuda \
-  --calibration-sizes 5,10,20,50
+  --calibration-sizes 5,10,20,50 \
+  --split-strategy interleaved
 ```
 
 The default `--split-strategy chronological` uses early calibration segments
@@ -42,6 +69,8 @@ Outputs are isolated under `runs/personalization-<timestamp>/`:
 - `split_manifest.json`: exact calibration/evaluation frame provenance
 
 Use `--index-only` to validate data and temporal splits without loading a model.
+The evaluated universal checkpoint has SHA-256
+`be2c9951c02543f262d3413c9e170b303592e47922e607af5444893ca8376564`.
 
 ## Files
 
@@ -70,8 +99,12 @@ TEyeD personalization path.
 ## Tests
 
 ```bash
-python -m pytest -q
+python3 -m pytest -q
 ```
+
+The current suite contains 24 passing tests, including regression checks for
+adapter identity, guarded fallback, subject/layer hidden-state layout, and both
+split strategies' segment/frame embargoes.
 
 ## Authentication
 
