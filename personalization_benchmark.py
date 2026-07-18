@@ -47,6 +47,7 @@ from personalize_from_universal import (
 METHODS = ("bias", "rotation", "affine")
 PROTOCOLS = ("chronological", "interleaved")
 SCALE_CANDIDATES = (0.0, 0.25, 0.5, 0.75, 1.0)
+WIN_THRESHOLD_DEG = 1e-3
 
 
 def parse_csv_choices(value: str, allowed: Sequence[str]) -> List[str]:
@@ -366,7 +367,7 @@ def aggregate_results(rows: Sequence[Mapping[str, object]]) -> List[Dict[str, ob
                     row["improvement_mean_deg"] for row in repeat_rows
                 ])),
                 "win_rate": float(np.mean([
-                    row["improvement_mean_deg"] > 0.0 for row in repeat_rows
+                    row["improvement_mean_deg"] > WIN_THRESHOLD_DEG for row in repeat_rows
                 ])),
                 "activation_rate": float(np.mean([
                     row["adapter_scale"] > 0.0 for row in repeat_rows
@@ -388,6 +389,7 @@ def aggregate_results(rows: Sequence[Mapping[str, object]]) -> List[Dict[str, ob
             "improvement_p05_deg": float(np.percentile(improvements, 5)),
             "improvement_p95_deg": float(np.percentile(improvements, 95)),
             "subject_win_rate": float(np.mean([item["win_rate"] for item in repeat_metrics])),
+            "subject_win_threshold_deg": WIN_THRESHOLD_DEG,
             "adapter_activation_rate": float(np.mean([
                 item["activation_rate"] for item in repeat_metrics
             ])),
@@ -420,7 +422,8 @@ def aggregate_subject_results(rows: Sequence[Mapping[str, object]]) -> List[Dict
             ])),
             "mean_improvement_deg": float(improvements.mean()),
             "improvement_std_deg": float(improvements.std(ddof=0)),
-            "positive_repeat_rate": float(np.mean(improvements > 0.0)),
+            "positive_repeat_rate": float(np.mean(improvements > WIN_THRESHOLD_DEG)),
+            "positive_repeat_threshold_deg": WIN_THRESHOLD_DEG,
             "adapter_activation_rate": float(np.mean([
                 row["adapter_scale"] > 0.0 for row in selected
             ])),
