@@ -36,7 +36,10 @@ chronological `K=20` improved the full later-time evaluation from 1.2176 deg to
 1.1581 deg over 100 stratified calibration repeats (mean gain 0.0595 deg,
 repeat standard deviation 0.0142 deg, 5th-percentile gain 0.0391 deg). This is
 the leading candidate, but it remains provisional until the running 5-fold,
-56-subject evaluation completes.
+56-subject evaluation completes. The gain is checkpoint-dependent: the stronger
+no-constraint universal checkpoint starts at 0.9180 deg and does not benefit
+from chronological affine calibration, so absolute personalized error and the
+unadapted universal baseline must always be reported together.
 
 ## Recommended workflow
 
