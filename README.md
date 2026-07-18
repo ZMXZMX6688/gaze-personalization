@@ -1,61 +1,109 @@
-# Gaze Personalization
+# Gaze Personalization：3D 视线估计个性化
 
-Personalization for appearance-based 3D gaze estimation. The supported TEyeD
-workflow starts from a frozen, subject-independent ResNet18-GRU checkpoint and
-fits a two-parameter yaw/pitch bias for each previously unseen subject.
+本项目研究一个实际问题：同一个 3D 视线估计模型面对不同用户时，眼球结构、注视习惯和拍摄条件会带来个人误差。项目先训练一个适用于全部用户的通用模型，再用新用户少量带标签的校准片段拟合轻量适配器，从而降低该用户的视线角误差。
 
-## Latest TEyeD result
+当前实验基于 **TEyeD 完整导出数据**，共包含 56 个用户。主模型为 ResNet18-GRU，输入眼部视频片段，输出三维视线方向。
 
-The current result uses the universal model's six held-out subjects. For each
-subject, 50 calibration-pool clips are reserved and 750 non-overlapping clips
-are evaluated. Calibration and evaluation never share a segment or source
-frame, and a calibration-validation gate falls back to the universal prediction
-when an adapter has insufficient evidence of improvement.
+## 项目如何工作
 
-| Calibration clips (K) | Universal macro mean | Personalized macro mean | Improvement | Subject wins |
+完整流程可以概括为四步：
+
+1. 用训练用户的数据训练通用 3D 视线模型。
+2. 冻结通用模型的全部参数。
+3. 为新用户采集 K 个带标签校准片段，并拟合一个小型输出适配器。
+4. 在独立评测片段上同时计算校准前、校准后的角度误差。
+
+当前实现了三种适配器：
+
+| 适配器 | 参数量 | 作用 |
+|---|---:|---|
+| yaw/pitch bias | 2 | 修正水平和垂直方向的固定偏差 |
+| SO(3) rotation | 3 | 对三维视线方向做小角度旋转 |
+| tangent affine | 6 | 修正偏移、缩放和水平/垂直方向之间的耦合 |
+
+项目中的常用术语：
+
+| 术语 | 含义 |
+|---|---|
+| K | 每位新用户参与拟合的校准片段数量 |
+| Baseline | 通用模型在个性化校准前的误差 |
+| Personalized | 加载用户适配器后的误差 |
+| Gain | Baseline 减去 Personalized，数值越大表示改善越明显 |
+| Macro mean | 先计算每位用户的平均误差，再对用户取平均 |
+| Chronological | 使用记录前段做校准，使用后段做评测 |
+| Interleaved | 在整段记录中分散选择校准片段，并隔离相邻评测片段 |
+
+## 当前实验结果
+
+一句话总结：**当前最低个性化误差为 0.8992°；约束版 checkpoint 上的稳定个性化改善为 0.0672°（5.52%）。**
+
+| 通用模型 | 个性化方案 | Baseline | Personalized | Gain | 相对改善 |
+|---|---|---:|---:|---:|---:|
+| C1/C2/C3 约束版 | chronological affine，K=40 | 1.2176° | 1.1504° | 0.0672° | 5.52% |
+| 无约束版 | interleaved bias，K=50 | 0.9180° | **0.8992°** | 0.0188° | 2.05% |
+
+结果可以这样理解：
+
+- **追求最低最终误差：** 无约束通用模型加 interleaved bias，目前达到 0.8992°。
+- **观察稳定的时间外推改善：** C1/C2/C3 约束版通用模型加 chronological affine，K=40 时从 1.2176° 降至 1.1504°。
+- **通用模型质量很重要：** 无约束版的校准前误差已经达到 0.9180°，明显低于约束版的 1.2176°。
+- **个性化效果与 checkpoint 有关：** chronological affine 在约束版上带来稳定改善；在无约束版的 K=20 实验中，误差增加约 0.0695°。
+- **结果汇报方式：** 每项实验同时给出 Baseline、Personalized 和 Gain，便于判断基础模型精度与个性化贡献。
+
+以上结果来自固定的 6 位留出用户。覆盖 56 位用户的五折交叉验证正在运行，完成后将更新总体结果。
+
+<details>
+<summary>查看 chronological affine 的完整 K 曲线</summary>
+
+这组实验使用 C1/C2/C3 约束版 checkpoint。每位用户预留 50 个早期校准片段，评测使用后续片段。每个 K 进行 50 次分层重复抽样，K=40 另外完成了 100 次确认实验。
+
+| K | Personalized | 平均 Gain | 重复标准差 | Gain 的 5% 分位数 |
 |---:|---:|---:|---:|---:|
-| 5 | 1.2076 deg | 1.1800 deg | 0.0276 deg | 2/6 |
-| 10 | 1.2076 deg | 1.1916 deg | 0.0160 deg | 1/6 |
-| **20** | **1.2076 deg** | **1.1543 deg** | **0.0533 deg (4.4%)** | **3/6** |
-| 50 | 1.2076 deg | 1.1618 deg | 0.0458 deg | 3/6 |
+| 5 | 1.2370° | -0.0194° | 0.0484° | -0.1172° |
+| 10 | 1.1851° | 0.0326° | 0.0334° | -0.0246° |
+| 15 | 1.1713° | 0.0463° | 0.0243° | 0.0042° |
+| 20 | 1.1582° | 0.0594° | 0.0126° | 0.0425° |
+| 25 | 1.1555° | 0.0621° | 0.0149° | 0.0423° |
+| 30 | 1.1607° | 0.0569° | 0.0133° | 0.0391° |
+| 40 | **1.1508°** | **0.0668°** | 0.0032° | 0.0620° |
+| 50 | 1.1583° | 0.0593° | 0.0000° | 0.0593° |
 
-`K=20` is the current recommended operating point. These results use the
-`interleaved` session-wide protocol: calibration segments are distributed over
-the recording and their neighboring segments are excluded from evaluation.
-They demonstrate within-session personalization, not future-session or
-strictly later-time generalization.
+K=40 的 100 次确认结果：
 
-The harder `chronological` pilot uses only early segments for calibration. At
-`K=50`, it changed the macro mean from 1.2076 deg to 1.2121 deg (-0.0045 deg),
-so no positive temporal-generalization claim is made. See `FINDINGS.md` for the
-full audit and negative-result analysis.
+- Baseline：1.2176°
+- Personalized：1.1504°
+- 平均 Gain：0.0672°
+- 重复标准差：0.0033°
+- Gain 的 5% / 95% 分位数：+0.0619° / +0.0725°
+- 有效改善比例：80.0%，有效改善阈值为 0.001°
 
-A later repeated-adapter audit found that the negative result is specific to
-the two-parameter bias. A six-parameter near-identity tangent affine adapter
-becomes stable from chronological `K>=15`. The current best point is `K=40`:
-over 100 stratified repeats it improved the full later-time evaluation from
-1.2176 deg to 1.1504 deg (mean gain 0.0672 deg, repeat standard deviation
-0.0033 deg, 5th-percentile gain 0.0619 deg). This remains provisional until the
-running 5-fold, 56-subject evaluation completes. The gain is checkpoint-dependent: the stronger
-no-constraint universal checkpoint starts at 0.9180 deg and does not benefit
-from chronological affine calibration, so absolute personalized error and the
-unadapted universal baseline must always be reported together.
+曲线显示 K≥15 后，Gain 的 5% 分位数保持为正；K=40 当前兼顾最终误差与重复稳定性。
 
-## Recommended workflow
+</details>
 
-`personalize_from_universal.py` enforces the evaluation boundary explicitly:
+<details>
+<summary>查看早期单次 K=20 结果</summary>
 
-1. Reproduce the universal model's subject-disjoint split (`seed=42`).
-2. Load the universal checkpoint with `strict=True` and freeze every parameter.
-3. Reserve whole segments from each held-out subject as labeled calibration.
-4. Exclude neighboring embargo segments before evaluating the remaining clips.
-5. Report baseline and personalized metrics for every subject and calibration size.
+早期 deterministic interleaved bias 实验在 K=20 时得到 1.2076° → 1.1543°，Gain 为 0.0533°（4.4%）。加入 20 次分层重复抽样后，平均 Gain 为 0.0320°。该记录用于展示校准样本选择带来的波动，当前主结论采用大规模重复实验。
 
-Calibration and evaluation never share a segment or source frame. The default
-TEyeD indexing settings are `segment_min_len=120`, at most 60 segments per
-subject, and 15 uniformly spaced clips per segment. On the local 56-subject
-export these settings reproduce the historical validation/test counts of
-4,500/5,400 clips.
+</details>
+
+## 56 用户五折实验进度
+
+五折 subject-disjoint 交叉验证会让 56 个用户各自作为测试用户一次。当前状态：
+
+- fold 0-3 正在训练；
+- fold 4 已进入队列；
+- 每折训练结束后自动运行个性化评测；
+- 最终汇总目录为 `/data1/luxliang/gaze-personalization/cv5/aggregate`。
+
+当前五折任务评估 C1/C2/C3 约束训练路径。后续实验计划加入无约束通用模型的五折对照。
+
+## 快速运行
+
+### 1. 运行单个 checkpoint 的个性化评测
+
+`personalize_from_universal.py` 会复现 subject-disjoint 数据划分，冻结通用模型，为每位测试用户拟合 yaw/pitch bias，并保存完整的校准与评测来源。
 
 ```bash
 python3 personalize_from_universal.py \
@@ -66,36 +114,18 @@ python3 personalize_from_universal.py \
   --split-strategy interleaved
 ```
 
-The default `--split-strategy chronological` uses early calibration segments
-and evaluates strictly later in the recording. This is the harder temporal
-generalization protocol. `--split-strategy interleaved` distributes calibration
-segments across the session and evaluates on non-neighboring segments; it models
-a short session-wide calibration while preserving segment and frame isolation.
+默认 TEyeD 索引参数为：
 
-Outputs are isolated under `runs/personalization-<timestamp>/`:
+- `segment_min_len=120`
+- 每位用户最多 60 个 segment
+- 每个 segment 均匀提取 15 个 clip
+- 数据划分随机种子为 `seed=42`
 
-- `results.csv`: per-subject baseline and personalized metrics
-- `summary.json`: configuration, checkpoint SHA-256, and macro-subject metrics
-- `adapters.json`: learned yaw/pitch biases
-- `split_manifest.json`: exact calibration/evaluation frame provenance
+在当前 56 用户导出数据上，该配置得到 4,500 个验证 clips 和 5,400 个测试 clips。
 
-Use `--index-only` to validate data and temporal splits without loading a model.
-The evaluated universal checkpoint has SHA-256
-`be2c9951c02543f262d3413c9e170b303592e47922e607af5444893ca8376564`.
+### 2. 比较多种适配器
 
-## Large-scale adapter benchmark
-
-`personalization_benchmark.py` caches the frozen universal prediction for every
-indexed held-out clip, then compares three small output adapters without
-re-decoding video:
-
-- `bias`: two-parameter yaw/pitch offset
-- `rotation`: three-parameter SO(3) rotation
-- `affine`: six-parameter tangent-plane affine transform
-
-It supports repeated stratified calibration sampling, both temporal protocols,
-calibration-validation fallback, repeat-level uncertainty, and per-subject
-stability summaries.
+`personalization_benchmark.py` 会先缓存通用模型预测，再比较 bias、rotation 和 affine。缓存可以减少视频重复解码，适合大规模 K 扫描和重复抽样。
 
 ```bash
 python3 personalization_benchmark.py \
@@ -110,54 +140,64 @@ python3 personalization_benchmark.py \
   --repeats 20
 ```
 
-The output contains `results.csv`, `summary.csv`, `subject_summary.csv`,
-`summary.json`, and an exact `split_manifest.json`.
+输出文件包括：
 
-For full subject-disjoint cross-validation, generate folds with
-`make_subject_cv_folds.py`. `train_ours_two_stage.py --split-json ...
---fold-index ...` then trains a universal checkpoint on an explicit fold and
-writes the exact subject split next to the checkpoint.
+- `results.csv`：每位用户、每次重复的结果
+- `summary.csv`：各实验配置的汇总指标
+- `subject_summary.csv`：逐用户稳定性统计
+- `summary.json`：实验参数与总体结果
+- `split_manifest.json`：校准和评测片段的来源记录
 
-## Files
+### 3. 运行 subject-disjoint 交叉验证
 
-- `personalize_from_universal.py` - frozen-universal calibration and evaluation
-- `personalization_benchmark.py` - cached repeated bias/SO(3)/affine benchmark
-- `make_subject_cv_folds.py` - deterministic subject-disjoint CV fold generator
-- `train_ours_two_stage.py` - population training and experimental subject conditioning
-- `personalized_main_sequence.py` - Main Sequence detector/calibrator/verifier research code
-- `ablation_teyed_with_ms.py` - historical TEyeD Main Sequence ablation
-- `tests/` - unit and regression tests
-- `FINDINGS.md` - experiment findings and known limitations
+`make_subject_cv_folds.py` 用于生成确定性的用户级交叉验证划分。`train_ours_two_stage.py --split-json ... --fold-index ...` 根据指定 fold 训练通用模型，并将用户划分写入 checkpoint 目录。
 
-The `feat_scale` and `hidden_init` modes in `train_ours_two_stage.py` condition
-training subjects. They are not, by themselves, an unseen-user calibration
-protocol. Their projections now initialize to the universal identity, inference
-accepts `subject_idx`, checkpoints are separated by mode, and EMA-selected
-weights are saved consistently.
+## 数据隔离
 
-## Main Sequence limitation
+个性化实验采用 segment 级数据隔离：
 
-Personalized Main Sequence constraints require data fast enough to resolve
-20-80 ms saccades. On this 60 fps export, offline fits have near-zero R-squared,
-the historical training path has no usable saccade dynamics, and inference
-verification did not improve angular error. Treat this branch as research code
-for future high-speed (preferably at least 250 fps) data, not as the official
-TEyeD personalization path.
+- 校准集与评测集来自不同 segment；
+- interleaved 协议会排除校准 segment 的相邻 segment；
+- `split_manifest.json` 记录每个 clip 的 segment 和源帧；
+- calibration-validation gate 根据校准内部验证结果选择适配强度；
+- 证据较弱时，gate 选择零强度，输出保持通用模型预测。
 
-## Tests
+通用约束版 checkpoint 的 SHA-256：
+
+```text
+be2c9951c02543f262d3413c9e170b303592e47922e607af5444893ca8376564
+```
+
+## 代码结构
+
+- `personalize_from_universal.py`：冻结通用模型并完成新用户校准
+- `personalization_benchmark.py`：多适配器、大规模重复实验
+- `make_subject_cv_folds.py`：生成 subject-disjoint 五折划分
+- `train_ours_two_stage.py`：训练通用模型与实验性用户条件分支
+- `personalized_main_sequence.py`：个性化 Main Sequence 研究代码
+- `ablation_teyed_with_ms.py`：TEyeD Main Sequence 历史消融
+- `tests/`：单元测试与回归测试
+- `FINDINGS.md`：详细实验记录、逐用户结果与问题分析
+
+## Main Sequence 分支
+
+Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通常需要能够解析 20-80 ms 眼跳过程的高帧率数据。当前 TEyeD 导出为 60 fps，离线拟合的 R² 接近 0，推理验证也没有带来角度误差改善。
+
+当前正式 TEyeD 个性化路径采用冻结通用模型加轻量输出适配器。Main Sequence 分支保留为高帧率数据研究方向，建议采集帧率达到 250 fps 或更高。
+
+## 测试
 
 ```bash
 python3 -m pytest -q
 ```
 
-The current suite contains 30 passing tests, including regression checks for
-adapter identity, SO(3)/affine recovery, guarded fallback, subject-disjoint CV,
-subject/layer hidden-state layout, and both split strategies' segment/frame
-embargoes.
+当前测试集包含 30 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、用户级交叉验证、GRU 隐状态布局，以及两种协议的 segment/frame 隔离。
 
-## Authentication
+## 服务器与认证
 
-`upload_and_run.py` uses the local SSH agent/key through `scp` and `ssh`. It does
-not store server passwords or API tokens. Configure paths through CLI arguments
-or environment variables (`GAZE_HOST`, `GAZE_USER`, `EYE_DATA_DIR`, and
-`UNIVERSAL_CHECKPOINT`).
+`upload_and_run.py` 通过本机 SSH agent/key 调用 `scp` 和 `ssh`。服务器地址、用户、数据目录和 checkpoint 可以通过命令行参数或以下环境变量配置：
+
+- `GAZE_HOST`
+- `GAZE_USER`
+- `EYE_DATA_DIR`
+- `UNIVERSAL_CHECKPOINT`
