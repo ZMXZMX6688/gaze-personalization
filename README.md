@@ -31,12 +31,12 @@ so no positive temporal-generalization claim is made. See `FINDINGS.md` for the
 full audit and negative-result analysis.
 
 A later repeated-adapter audit found that the negative result is specific to
-the two-parameter bias. A six-parameter near-identity tangent affine adapter at
-chronological `K=20` improved the full later-time evaluation from 1.2176 deg to
-1.1581 deg over 100 stratified calibration repeats (mean gain 0.0595 deg,
-repeat standard deviation 0.0142 deg, 5th-percentile gain 0.0391 deg). This is
-the leading candidate, but it remains provisional until the running 5-fold,
-56-subject evaluation completes. The gain is checkpoint-dependent: the stronger
+the two-parameter bias. A six-parameter near-identity tangent affine adapter
+becomes stable from chronological `K>=15`. The current best point is `K=40`:
+over 100 stratified repeats it improved the full later-time evaluation from
+1.2176 deg to 1.1504 deg (mean gain 0.0672 deg, repeat standard deviation
+0.0033 deg, 5th-percentile gain 0.0619 deg). This remains provisional until the
+running 5-fold, 56-subject evaluation completes. The gain is checkpoint-dependent: the stronger
 no-constraint universal checkpoint starts at 0.9180 deg and does not benefit
 from chronological affine calibration, so absolute personalized error and the
 unadapted universal baseline must always be reported together.
