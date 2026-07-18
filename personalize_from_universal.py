@@ -440,7 +440,7 @@ def angular_errors_deg(predictions: torch.Tensor, targets: torch.Tensor) -> np.n
     predictions = F.normalize(predictions.float(), dim=-1)
     targets = F.normalize(targets.float(), dim=-1)
     cosine = (predictions * targets).sum(dim=-1).clamp(-1.0, 1.0)
-    return torch.rad2deg(torch.acos(cosine)).cpu().numpy()
+    return torch.rad2deg(torch.acos(cosine)).detach().cpu().numpy()
 
 
 def summarize_errors(errors: Iterable[float]) -> Dict[str, float]:

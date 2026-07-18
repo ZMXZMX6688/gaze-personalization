@@ -30,6 +30,14 @@ The harder `chronological` pilot uses only early segments for calibration. At
 so no positive temporal-generalization claim is made. See `FINDINGS.md` for the
 full audit and negative-result analysis.
 
+A later repeated-adapter audit found that the negative result is specific to
+the two-parameter bias. A six-parameter near-identity tangent affine adapter at
+chronological `K=20` improved the full later-time evaluation from 1.2176 deg to
+1.1581 deg over 100 stratified calibration repeats (mean gain 0.0595 deg,
+repeat standard deviation 0.0142 deg, 5th-percentile gain 0.0391 deg). This is
+the leading candidate, but it remains provisional until the running 5-fold,
+56-subject evaluation completes.
+
 ## Recommended workflow
 
 `personalize_from_universal.py` enforces the evaluation boundary explicitly:
@@ -72,9 +80,46 @@ Use `--index-only` to validate data and temporal splits without loading a model.
 The evaluated universal checkpoint has SHA-256
 `be2c9951c02543f262d3413c9e170b303592e47922e607af5444893ca8376564`.
 
+## Large-scale adapter benchmark
+
+`personalization_benchmark.py` caches the frozen universal prediction for every
+indexed held-out clip, then compares three small output adapters without
+re-decoding video:
+
+- `bias`: two-parameter yaw/pitch offset
+- `rotation`: three-parameter SO(3) rotation
+- `affine`: six-parameter tangent-plane affine transform
+
+It supports repeated stratified calibration sampling, both temporal protocols,
+calibration-validation fallback, repeat-level uncertainty, and per-subject
+stability summaries.
+
+```bash
+python3 personalization_benchmark.py \
+  --data-dir /path/to/EXPORT_PUPIL_ALL \
+  --checkpoint /path/to/resnet18_gru_bio_two_stage_best.pt \
+  --cache-dir /large_disk/gaze-personalization-cache \
+  --output-dir /large_disk/gaze-personalization-benchmark \
+  --device cuda:0 \
+  --methods bias,rotation,affine \
+  --protocols chronological,interleaved \
+  --calibration-sizes 5,10,20,50 \
+  --repeats 20
+```
+
+The output contains `results.csv`, `summary.csv`, `subject_summary.csv`,
+`summary.json`, and an exact `split_manifest.json`.
+
+For full subject-disjoint cross-validation, generate folds with
+`make_subject_cv_folds.py`. `train_ours_two_stage.py --split-json ...
+--fold-index ...` then trains a universal checkpoint on an explicit fold and
+writes the exact subject split next to the checkpoint.
+
 ## Files
 
 - `personalize_from_universal.py` - frozen-universal calibration and evaluation
+- `personalization_benchmark.py` - cached repeated bias/SO(3)/affine benchmark
+- `make_subject_cv_folds.py` - deterministic subject-disjoint CV fold generator
 - `train_ours_two_stage.py` - population training and experimental subject conditioning
 - `personalized_main_sequence.py` - Main Sequence detector/calibrator/verifier research code
 - `ablation_teyed_with_ms.py` - historical TEyeD Main Sequence ablation
@@ -102,9 +147,10 @@ TEyeD personalization path.
 python3 -m pytest -q
 ```
 
-The current suite contains 24 passing tests, including regression checks for
-adapter identity, guarded fallback, subject/layer hidden-state layout, and both
-split strategies' segment/frame embargoes.
+The current suite contains 30 passing tests, including regression checks for
+adapter identity, SO(3)/affine recovery, guarded fallback, subject-disjoint CV,
+subject/layer hidden-state layout, and both split strategies' segment/frame
+embargoes.
 
 ## Authentication
 

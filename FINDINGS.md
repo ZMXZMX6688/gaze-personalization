@@ -1,5 +1,35 @@
 # 迭代与优化findings（2026-07-07）
 
+## 2026-07-18：输出适配器大规模重采样审计
+
+新增 `personalization_benchmark.py`，把 6 个未见用户的 5,400 个普适模型预测缓存一次，
+随后在不重复解码视频的前提下比较三类小参数适配器：2 参数 yaw/pitch bias、3 参数
+SO(3) rotation、6 参数 tangent affine。正式扫描覆盖 chronological/interleaved、
+K∈{5,10,20,50}、20 次分层随机重采样，共 2,880 个“用户×方法×协议×K×重复”结果。
+
+关键结果如下：
+
+| protocol | adapter | K | base macro | personalized macro | improvement | repeat std | p05 | user-repeat win rate |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| chronological | affine | 20 | 1.2176° | **1.1573°** | **0.0604°** | 0.0122° | +0.0448° | 90.8% |
+| chronological | affine | 50 | 1.2176° | 1.1583° | 0.0593° | 0 | +0.0593° | 83.3% |
+| interleaved | affine | 50 | 1.2076° | 1.1562° | 0.0514° | 0 | +0.0514° | 16.7% |
+| interleaved | bias | 50 | 1.2076° | 1.1618° | 0.0458° | 0 | +0.0458° | 50.0% |
+| interleaved | bias | 20 | 1.2076° | 1.1756° | 0.0320° | 0.0154° | ≈0° | 25.0% |
+
+原单次 interleaved K=20 bias 的 0.0533° 提升在随机重采样后降为 0.0320°，说明旧结果
+对 calibration clip 的选择有明显敏感性。interleaved affine K=50 虽然宏平均较好，但主要由
+单个用户贡献，不能作为稳定普适结论。
+
+新的稳定候选是 **chronological affine K=20**：固定 50-clip early calibration pool 后，
+进一步做 100 次重采样，平均改善 **0.0595°**，标准差 0.0142°，5% 分位仍为
+**+0.0391°**，89.8% 的用户-重复组合获益。该结果说明偏差不只是常数 yaw/pitch offset，
+还包含个体化增益和轴间耦合；6 参数近恒等仿射比 2 参数 bias 更适合从早期校准外推到后续片段。
+
+以上仍基于同一个普适 checkpoint 的 6 个 held-out SID。已经启动 5 折 subject-disjoint
+训练与个性化评测，使 56 个 SID 各作为测试用户一次；在该交叉验证完成前，不把上述收益
+升级为全数据集结论。
+
 ## 2026-07-15：普适模型到未见用户的个性化审计
 
 - 原 `train_ours_two_stage.py` 只在训练批次的 `forward_all(subject_idx=...)`

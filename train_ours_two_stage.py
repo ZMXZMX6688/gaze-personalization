@@ -17,6 +17,7 @@ import math
 import random
 import csv
 import datetime
+import json
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 
@@ -638,7 +639,8 @@ def train_two_stage(
     augment: bool = True,
     seed: int = 42,
     personalize_mode: str = 'none',
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    subject_split: Optional[Dict[str, List[str]]] = None,
 ):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     random.seed(seed)
@@ -676,18 +678,39 @@ def train_two_stage(
     all_sids = sorted({pat.match(p.name).group(1)
                        for p in root.iterdir()
                        if p.is_file() and pat.match(p.name)})
-    rng = random.Random(seed)
-    shuffled = list(all_sids)
-    rng.shuffle(shuffled)
-    n = len(shuffled)
-    n_test = max(1, int(round(n * 0.1)))
-    test_sids = shuffled[n - n_test:]
-    train_val_sids = shuffled[:n - n_test]
-    rng.shuffle(train_val_sids)
-    n_val = max(1, int(round(len(train_val_sids) * 0.1)))
-    val_sids = train_val_sids[:n_val]
-    train_sids = train_val_sids[n_val:]
+    if subject_split is None:
+        rng = random.Random(seed)
+        shuffled = list(all_sids)
+        rng.shuffle(shuffled)
+        n = len(shuffled)
+        n_test = max(1, int(round(n * 0.1)))
+        test_sids = shuffled[n - n_test:]
+        train_val_sids = shuffled[:n - n_test]
+        rng.shuffle(train_val_sids)
+        n_val = max(1, int(round(len(train_val_sids) * 0.1)))
+        val_sids = train_val_sids[:n_val]
+        train_sids = train_val_sids[n_val:]
+    else:
+        train_sids = list(subject_split["train_sids"])
+        val_sids = list(subject_split["val_sids"])
+        test_sids = list(subject_split["test_sids"])
+        split_sets = [set(train_sids), set(val_sids), set(test_sids)]
+        if any(not split for split in split_sets):
+            raise ValueError("Explicit train/val/test subject splits must be non-empty")
+        if any(split_sets[i].intersection(split_sets[j])
+               for i in range(3) for j in range(i + 1, 3)):
+            raise ValueError("Explicit train/val/test subject splits overlap")
+        unknown = sorted(set().union(*split_sets) - set(all_sids))
+        if unknown:
+            raise ValueError(f"Unknown SIDs in explicit split: {unknown}")
     print(f"训练 SIDs: {len(train_sids)}, 验证 SIDs: {len(val_sids)}, 测试 SIDs: {len(test_sids)}")
+    with (output_dir / "subject_split.json").open("w") as handle:
+        json.dump({
+            "seed": seed,
+            "train_sids": train_sids,
+            "val_sids": val_sids,
+            "test_sids": test_sids,
+        }, handle, indent=2)
 
     # 受试者索引映射（始终构建，用于 dataset 返回 subject_idx）
     sid_to_idx = {sid: i for i, sid in enumerate(train_sids)} if personalize_mode != 'none' else {}
@@ -1023,8 +1046,26 @@ if __name__ == "__main__":
                         help="个性化模式: none | feat_scale | hidden_init")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="输出目录；默认按个性化模式隔离到 checkpoints/")
+    parser.add_argument("--split-json", type=str, default=None,
+                        help="显式用户划分 JSON；可为单个 split 或包含 folds 的文件")
+    parser.add_argument("--fold-index", type=int, default=None,
+                        help="当 --split-json 包含 folds 时选择的 fold 下标")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+
+    subject_split = None
+    if args.split_json:
+        with open(args.split_json, "r") as handle:
+            split_payload = json.load(handle)
+        if "folds" in split_payload:
+            if args.fold_index is None:
+                parser.error("--fold-index is required when --split-json contains folds")
+            try:
+                subject_split = split_payload["folds"][args.fold_index]
+            except IndexError:
+                parser.error(f"Invalid --fold-index {args.fold_index}")
+        else:
+            subject_split = split_payload
 
     train_two_stage(
         data_dir=args.data_dir,
@@ -1040,5 +1081,6 @@ if __name__ == "__main__":
         weight_decay=args.weight_decay,
         early_stop_patience=args.early_stop_patience,
         seed=args.seed,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        subject_split=subject_split,
     )
