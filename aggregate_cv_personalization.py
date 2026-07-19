@@ -58,12 +58,13 @@ def main() -> None:
     if len(test_subjects) != 56:
         raise AssertionError(f"Expected 56 unique test subjects, found {len(test_subjects)}")
 
-    summary_rows = aggregate_results(rows)
+    summary_rows = aggregate_results(rows, expected_subjects=len(test_subjects))
     subject_rows = aggregate_subject_results(rows)
     fold_rows = []
     for fold in range(args.folds):
         selected = [row for row in rows if row["fold"] == fold]
-        for row in aggregate_results(selected):
+        fold_subjects = len(fold_configs[fold]["held_out_test_sids"])
+        for row in aggregate_results(selected, expected_subjects=fold_subjects):
             fold_rows.append({"fold": fold, **row})
 
     write_csv(output_dir / "results_all_folds.csv", rows)

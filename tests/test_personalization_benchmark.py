@@ -6,11 +6,13 @@ from make_subject_cv_folds import make_subject_cv_folds
 from personalization_benchmark import (
     RotationAdapter,
     TangentAffineAdapter,
+    aggregate_results,
+    find_largest_feasible_split,
     fit_guarded_adapter,
     rotation_matrix_from_vector,
     stratified_sample_indices,
 )
-from personalize_from_universal import angles_to_vector, angular_errors_deg
+from personalize_from_universal import ClipRecord, angles_to_vector, angular_errors_deg
 
 
 def test_stratified_sampling_is_reproducible_and_unique():
@@ -116,3 +118,72 @@ def test_subject_cv_folds_are_disjoint_and_cover_all_subjects():
         assert train | val | test == set(sids)
         covered.extend(test)
     assert sorted(covered) == sorted(sids)
+
+
+def _record(segment_id, offset):
+    start = segment_id * 100 + offset
+    return ClipRecord(
+        sid="short",
+        start=start,
+        target_frame=start + 28,
+        segment_id=segment_id,
+        segment_start=segment_id * 100,
+        segment_end=(segment_id + 1) * 100,
+    )
+
+
+def test_adaptive_split_uses_largest_feasible_requested_k():
+    records = [
+        _record(segment_id, offset)
+        for segment_id in range(3)
+        for offset in range(0, 75, 5)
+    ]
+    pool_size, calibration, evaluation, _, failures = find_largest_feasible_split(
+        records,
+        calibration_pool_sizes=[5, 10, 20, 50],
+        gap_segments=1,
+        protocol="chronological",
+    )
+    assert pool_size == 10
+    assert len(calibration) == 10
+    assert {record.segment_id for record in evaluation} == {2}
+    assert set(failures) == {50, 20}
+
+
+def test_adaptive_split_rejects_recording_without_embargoed_evaluation():
+    records = [
+        _record(segment_id, offset)
+        for segment_id in range(2)
+        for offset in range(0, 75, 5)
+    ]
+    try:
+        find_largest_feasible_split(
+            records,
+            calibration_pool_sizes=[5, 10, 20, 50],
+            gap_segments=1,
+            protocol="interleaved",
+        )
+    except ValueError as exc:
+        assert "No feasible interleaved split" in str(exc)
+    else:
+        raise AssertionError("Expected short recording to be rejected")
+
+
+def test_aggregate_reports_subject_coverage():
+    rows = []
+    for repeat in range(2):
+        for sid in ("S1", "S2"):
+            rows.append({
+                "protocol": "chronological",
+                "method": "bias",
+                "calibration_size": 5,
+                "repeat": repeat,
+                "sid": sid,
+                "base_mean_deg": 1.0,
+                "personalized_mean_deg": 0.9,
+                "improvement_mean_deg": 0.1,
+                "adapter_scale": 1.0,
+            })
+    summary = aggregate_results(rows, expected_subjects=4)[0]
+    assert summary["subjects"] == 2
+    assert summary["subject_coverage_rate"] == 0.5

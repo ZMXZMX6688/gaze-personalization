@@ -74,6 +74,56 @@ def stratified_sample_indices(count: int, sample_count: int, seed: int) -> List[
     return selected
 
 
+def find_largest_feasible_split(
+    records: Sequence[ClipRecord],
+    calibration_pool_sizes: Sequence[int],
+    gap_segments: int,
+    protocol: str,
+) -> Tuple[int, List[ClipRecord], List[ClipRecord], List[int], Dict[int, str]]:
+    """Find the largest requested calibration pool that preserves evaluation data.
+
+    Short recordings cannot always support the largest requested K while also
+    preserving the segment embargo. Trying requested sizes from largest to
+    smallest keeps one common evaluation split for every feasible K on a
+    subject, without weakening the protocol or fabricating calibration clips.
+    """
+    if protocol == "chronological":
+        split_function = split_calibration_pool
+    elif protocol == "interleaved":
+        split_function = split_interleaved_calibration_pool
+    else:
+        raise ValueError(f"Unknown protocol: {protocol}")
+
+    candidate_sizes = sorted({int(size) for size in calibration_pool_sizes}, reverse=True)
+    if not candidate_sizes or candidate_sizes[-1] <= 0:
+        raise ValueError("Calibration pool sizes must be positive")
+
+    failures: Dict[int, str] = {}
+    for pool_size in candidate_sizes:
+        try:
+            calibration_pool, evaluation, calibration_segments = split_function(
+                records, pool_size, gap_segments
+            )
+            if len(calibration_pool) < pool_size:
+                raise ValueError(
+                    f"Only {len(calibration_pool)} calibration clips are available"
+                )
+            return (
+                pool_size,
+                calibration_pool,
+                evaluation,
+                calibration_segments,
+                failures,
+            )
+        except ValueError as exc:
+            failures[pool_size] = str(exc)
+
+    attempted = ", ".join(
+        f"K={size}: {failures[size]}" for size in candidate_sizes
+    )
+    raise ValueError(f"No feasible {protocol} split ({attempted})")
+
+
 def rotation_matrix_from_vector(rotation: torch.Tensor) -> torch.Tensor:
     """Convert an axis-angle rotation vector to a 3x3 matrix."""
     rotation = rotation.float()
@@ -343,7 +393,10 @@ def write_csv(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
         writer.writerows(rows)
 
 
-def aggregate_results(rows: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
+def aggregate_results(
+    rows: Sequence[Mapping[str, object]],
+    expected_subjects: int = 0,
+) -> List[Dict[str, object]]:
     summaries = []
     keys = sorted({(
         str(row["protocol"]), str(row["method"]), int(row["calibration_size"])
@@ -375,11 +428,15 @@ def aggregate_results(rows: Sequence[Mapping[str, object]]) -> List[Dict[str, ob
             })
         improvements = np.asarray([item["improvement"] for item in repeat_metrics])
         personalized = np.asarray([item["personalized"] for item in repeat_metrics])
+        subject_count = len({row["sid"] for row in selected})
         summaries.append({
             "protocol": protocol,
             "method": method,
             "calibration_size": calibration_size,
-            "subjects": len({row["sid"] for row in selected}),
+            "subjects": subject_count,
+            "subject_coverage_rate": (
+                float(subject_count / expected_subjects) if expected_subjects else 1.0
+            ),
             "repeats": len(repeats),
             "base_macro_mean_deg": float(np.mean([item["base"] for item in repeat_metrics])),
             "personalized_macro_mean_deg": float(personalized.mean()),
@@ -458,6 +515,15 @@ def main() -> None:
                         default=parse_calibration_sizes("5,10,20,50"))
     parser.add_argument("--calibration-pool-size", type=int, default=0,
                         help="Reserved calibration pool size; 0 uses max(calibration_sizes)")
+    parser.add_argument(
+        "--insufficient-data-policy",
+        choices=("error", "adaptive"),
+        default="error",
+        help=(
+            "How to handle short subjects: error preserves strict legacy behavior; "
+            "adaptive backs off to the largest feasible requested K and records coverage"
+        ),
+    )
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--gap-segments", type=int, default=1)
     parser.add_argument("--segment-min-len", type=int, default=120)
@@ -581,20 +647,66 @@ def main() -> None:
     if max_calibration < max(args.calibration_sizes):
         parser.error("--calibration-pool-size cannot be smaller than calibration sizes")
     rows: List[Dict[str, object]] = []
+    coverage_rows: List[Dict[str, object]] = []
     split_manifest = {}
 
     for protocol_index, protocol in enumerate(args.protocols):
         split_manifest[protocol] = {}
-        split_function = (split_calibration_pool if protocol == "chronological"
-                          else split_interleaved_calibration_pool)
         for sid_index, sid in enumerate(test_sids):
             payload = caches[sid]
             records = [ClipRecord(**record) for record in payload["records"]]
             predictions = payload["predictions"].float()
             targets = payload["targets"].float()
-            calibration_pool, evaluation, calibration_segments = split_function(
-                records, max_calibration, args.gap_segments
-            )
+            if args.insufficient_data_policy == "adaptive" and not args.calibration_pool_size:
+                candidate_pool_sizes = args.calibration_sizes
+            else:
+                candidate_pool_sizes = [max_calibration]
+            try:
+                (
+                    selected_pool_size,
+                    calibration_pool,
+                    evaluation,
+                    calibration_segments,
+                    split_failures,
+                ) = find_largest_feasible_split(
+                    records,
+                    candidate_pool_sizes,
+                    args.gap_segments,
+                    protocol,
+                )
+            except ValueError as exc:
+                if args.insufficient_data_policy == "error":
+                    raise
+                reason = str(exc)
+                split_manifest[protocol][sid] = {
+                    "status": "skipped",
+                    "indexed_clips": len(records),
+                    "feasible_calibration_sizes": [],
+                    "skipped_calibration_sizes": list(args.calibration_sizes),
+                    "reason": reason,
+                }
+                coverage_rows.append({
+                    "protocol": protocol,
+                    "sid": sid,
+                    "status": "skipped",
+                    "indexed_clips": len(records),
+                    "calibration_pool_clips": 0,
+                    "evaluation_clips": 0,
+                    "feasible_calibration_sizes": "",
+                    "skipped_calibration_sizes": ",".join(
+                        str(size) for size in args.calibration_sizes
+                    ),
+                    "reason": reason,
+                })
+                print(f"[skip] {protocol} {sid}: {reason}", flush=True)
+                continue
+
+            feasible_calibration_sizes = [
+                size for size in args.calibration_sizes if size <= len(calibration_pool)
+            ]
+            skipped_calibration_sizes = [
+                size for size in args.calibration_sizes if size not in feasible_calibration_sizes
+            ]
             if args.max_eval_clips:
                 positions = np.linspace(
                     0, len(evaluation) - 1, args.max_eval_clips, dtype=np.int64
@@ -610,14 +722,34 @@ def main() -> None:
                 angular_errors_deg(evaluation_predictions, evaluation_targets)
             )
             split_manifest[protocol][sid] = {
+                "status": "evaluated",
                 "indexed_clips": len(records),
+                "selected_calibration_pool_size": selected_pool_size,
+                "feasible_calibration_sizes": feasible_calibration_sizes,
+                "skipped_calibration_sizes": skipped_calibration_sizes,
+                "larger_pool_failures": split_failures,
                 "calibration_pool": [asdict(record) for record in calibration_pool],
                 "evaluation": [asdict(record) for record in evaluation],
                 "calibration_segment_ids": calibration_segments,
                 "evaluation_segment_ids": sorted({record.segment_id for record in evaluation}),
             }
+            coverage_rows.append({
+                "protocol": protocol,
+                "sid": sid,
+                "status": "evaluated",
+                "indexed_clips": len(records),
+                "calibration_pool_clips": len(calibration_pool),
+                "evaluation_clips": base_metrics["n"],
+                "feasible_calibration_sizes": ",".join(
+                    str(size) for size in feasible_calibration_sizes
+                ),
+                "skipped_calibration_sizes": ",".join(
+                    str(size) for size in skipped_calibration_sizes
+                ),
+                "reason": "",
+            })
 
-            for calibration_size in args.calibration_sizes:
+            for calibration_size in feasible_calibration_sizes:
                 for repeat in range(args.repeats):
                     selection_seed = int(np.random.SeedSequence([
                         args.seed, protocol_index, sid_index, calibration_size, repeat
@@ -672,11 +804,12 @@ def main() -> None:
                         })
             print(
                 f"[sweep] {protocol} {sid}: eval={base_metrics['n']} "
-                f"rows={len(args.calibration_sizes) * args.repeats * len(args.methods)}",
+                f"K={feasible_calibration_sizes} skipped={skipped_calibration_sizes} "
+                f"rows={len(feasible_calibration_sizes) * args.repeats * len(args.methods)}",
                 flush=True,
             )
 
-    summary_rows = aggregate_results(rows)
+    summary_rows = aggregate_results(rows, expected_subjects=len(test_sids))
     subject_summary_rows = aggregate_subject_results(rows)
     config = vars(args).copy()
     for key in ("data_dir", "checkpoint", "cache_dir", "output_dir", "split_json"):
@@ -694,6 +827,7 @@ def main() -> None:
     write_csv(output_dir / "results.csv", rows)
     write_csv(output_dir / "summary.csv", summary_rows)
     write_csv(output_dir / "subject_summary.csv", subject_summary_rows)
+    write_csv(output_dir / "coverage.csv", coverage_rows)
     with (output_dir / "summary.json").open("w") as handle:
         json.dump({"config": config, "summary": summary_rows}, handle, indent=2)
     with (output_dir / "split_manifest.json").open("w") as handle:
