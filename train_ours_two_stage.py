@@ -731,11 +731,15 @@ def train_two_stage(
     ds_val   = TEyeDSeqDataset(data_dir, val_sids,   **ds_kw)
     ds_test  = TEyeDSeqDataset(data_dir, test_sids,  **ds_kw)
 
+    loader_workers = {
+        "num_workers": num_workers,
+        "persistent_workers": num_workers > 0,
+    }
     tr_loader = DataLoader(
-        ds_train, batch_size, shuffle=True, num_workers=num_workers, drop_last=True
+        ds_train, batch_size, shuffle=True, drop_last=True, **loader_workers
     )
-    val_loader = DataLoader(ds_val, batch_size, shuffle=False, num_workers=num_workers)
-    te_loader = DataLoader(ds_test, batch_size, shuffle=False, num_workers=num_workers)
+    val_loader = DataLoader(ds_val, batch_size, shuffle=False, **loader_workers)
+    te_loader = DataLoader(ds_test, batch_size, shuffle=False, **loader_workers)
 
     model = ResNet18GRUModel(personalize_mode=personalize_mode,
                              num_subjects=len(train_sids)).to(device)
