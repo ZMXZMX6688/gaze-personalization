@@ -631,6 +631,7 @@ def train_two_stage(
     stride: int = 4,
     img_size: int = 240,
     batch_size: int = 16,
+    num_workers: int = 4,
     epochs_stage1: int = 6,
     epochs_stage2: int = 9,
     lr: float = 1e-4,
@@ -646,6 +647,8 @@ def train_two_stage(
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if num_workers < 0:
+        raise ValueError("num_workers must be non-negative")
 
     effective_fps = EYE_CLIP_FPS / stride
     fps_tag = int(round(effective_fps))
@@ -728,9 +731,11 @@ def train_two_stage(
     ds_val   = TEyeDSeqDataset(data_dir, val_sids,   **ds_kw)
     ds_test  = TEyeDSeqDataset(data_dir, test_sids,  **ds_kw)
 
-    tr_loader = DataLoader(ds_train, batch_size, shuffle=True, num_workers=4, drop_last=True)
-    val_loader = DataLoader(ds_val, batch_size, shuffle=False, num_workers=4)
-    te_loader = DataLoader(ds_test, batch_size, shuffle=False, num_workers=4)
+    tr_loader = DataLoader(
+        ds_train, batch_size, shuffle=True, num_workers=num_workers, drop_last=True
+    )
+    val_loader = DataLoader(ds_val, batch_size, shuffle=False, num_workers=num_workers)
+    te_loader = DataLoader(ds_test, batch_size, shuffle=False, num_workers=num_workers)
 
     model = ResNet18GRUModel(personalize_mode=personalize_mode,
                              num_subjects=len(train_sids)).to(device)
@@ -1035,6 +1040,10 @@ if __name__ == "__main__":
     parser.add_argument("--stride", type=int, default=4)
     parser.add_argument("--img_size", type=int, default=240)
     parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument(
+        "--num-workers", type=int, default=4,
+        help="DataLoader worker processes; use 0 to avoid multiprocessing stalls",
+    )
     parser.add_argument("--epochs_stage1", type=int, default=6)
     parser.add_argument("--epochs_stage2", type=int, default=9)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -1075,6 +1084,7 @@ if __name__ == "__main__":
         stride=args.stride,
         img_size=args.img_size,
         batch_size=args.batch_size,
+        num_workers=args.num_workers,
         epochs_stage1=args.epochs_stage1,
         epochs_stage2=args.epochs_stage2,
         lr=args.lr,
