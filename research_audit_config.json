@@ -17,6 +17,34 @@
       "result_dirs": [
         "/data1/luxliang/gaze-personalization/runs/reliability-bias-no-constraint-heldout6-r20-20260726"
       ]
+    },
+    {
+      "name": "pir_single_strong_heldout6",
+      "summary_path": "/data1/luxliang/gaze-personalization/runs/reliability-bias-pir-single-strong-heldout6-r10-20260726/summary.json",
+      "result_dirs": [
+        "/data1/luxliang/gaze-personalization/runs/reliability-bias-pir-single-strong-heldout6-r10-20260726"
+      ]
+    },
+    {
+      "name": "pir_single_weak_heldout6",
+      "summary_path": "/data1/luxliang/gaze-personalization/runs/reliability-bias-pir-single-weak-heldout6-r10-20260726/summary.json",
+      "result_dirs": [
+        "/data1/luxliang/gaze-personalization/runs/reliability-bias-pir-single-weak-heldout6-r10-20260726"
+      ]
+    },
+    {
+      "name": "ablation_t4_heldout6",
+      "summary_path": "/data1/luxliang/gaze-personalization/runs/reliability-bias-ablation-t4-heldout6-r10-20260726/summary.json",
+      "result_dirs": [
+        "/data1/luxliang/gaze-personalization/runs/reliability-bias-ablation-t4-heldout6-r10-20260726"
+      ]
+    },
+    {
+      "name": "pir_two_stage_heldout6",
+      "summary_path": "/data1/luxliang/gaze-personalization/runs/reliability-bias-pir-two-stage-heldout6-r10-20260726/summary.json",
+      "result_dirs": [
+        "/data1/luxliang/gaze-personalization/runs/reliability-bias-pir-two-stage-heldout6-r10-20260726"
+      ]
     }
   ]
 }

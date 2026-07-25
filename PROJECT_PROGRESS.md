@@ -36,6 +36,7 @@
 | 无约束 checkpoint 外部验证 | 已完成、未通过 | 冻结公式的 6 个 protocol/K 配置全部平均退化 |
 | 研究发布准入检查 | 已完成 | 当前状态 FAIL；禁止宣称跨 checkpoint 普适 |
 | 一键研究审计 | 已完成 | 自动生成机制、归因、准入、输入/输出哈希与复现命令 |
+| 多 checkpoint 冻结验证 | 已完成 | 5 类外部 checkpoint 显示显著 checkpoint×protocol 交互 |
 | 无约束模型五折对照 | 待启动 | 使用相同 fold 划分建立更强通用基线 |
 | Main Sequence | 研究分支 | 60 fps 数据上的拟合信号较弱，面向后续高帧率数据 |
 
