@@ -145,6 +145,8 @@ def main() -> int:
         protocols,
         calibration_sizes,
         args.minimum_gain_deg,
+        confidence_level=0.95,
+        bootstrap_repeats=10000,
     )
     promotion_dir = args.output_dir / "promotion"
     promotion_dir.mkdir()
@@ -154,8 +156,8 @@ def main() -> int:
     write_csv(promotion_dir / "promotion_report.csv", promotion["rows"])
     figure_dir = args.output_dir / "figures"
     figure_dir.mkdir()
-    suite_labels, labels, matrix = build_gain_matrix(promotion["rows"])
-    plot_matrix(suite_labels, labels, matrix, figure_dir)
+    suite_labels, labels, matrix, passed = build_gain_matrix(promotion["rows"])
+    plot_matrix(suite_labels, labels, matrix, passed, figure_dir)
     with (figure_dir / "checkpoint_validation_matrix.csv").open(
         "w", newline="", encoding="utf-8"
     ) as handle:
@@ -164,6 +166,15 @@ def main() -> int:
         writer.writerows(
             [suite, *[f"{value:.9f}" for value in values]]
             for suite, values in zip(suite_labels, matrix)
+        )
+    with (figure_dir / "checkpoint_validation_status.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["suite", *labels])
+        writer.writerows(
+            [suite, *["PASS" if value else "FAIL" for value in values]]
+            for suite, values in zip(suite_labels, passed)
         )
 
     calibration_observations = load_observations_from_suites(suites)
@@ -213,6 +224,8 @@ def main() -> int:
                 sha256(figure_dir / "checkpoint_validation_matrix.csv"),
             "validation_matrix_svg_sha256":
                 sha256(figure_dir / "checkpoint_validation_matrix.svg"),
+            "validation_status_csv_sha256":
+                sha256(figure_dir / "checkpoint_validation_status.csv"),
             "predictability_summary_sha256":
                 sha256(predictability_dir / "predictability_summary.json"),
         },

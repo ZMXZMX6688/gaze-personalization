@@ -212,7 +212,7 @@ Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通
 python3 -m pytest -q
 ```
 
-当前测试集包含 48 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、失效归因、复现清单、验证矩阵可视化、校准可预测性，以及跨 checkpoint 研究发布准入。
+当前测试集包含 49 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、失效归因、复现清单、验证矩阵可视化、校准可预测性，以及带逐用户 bootstrap 下界的跨 checkpoint 研究发布准入。
 
 候选个性化方案对多个独立套件验证后，可运行：
 
@@ -223,7 +223,7 @@ python3 validate_personalization_promotion.py \
   --output-dir /path/to/promotion-audit
 ```
 
-任一指定配置平均 Gain 低于阈值时，检查返回非零状态，防止把 checkpoint 特定结果误写成普适结论。
+任一指定配置的平均 Gain 或逐用户 bootstrap 单侧 95% 下界低于阈值时，检查返回非零状态，防止把少量用户驱动的正均值误写成普适结论。
 
 完整研究审计可直接运行：
 

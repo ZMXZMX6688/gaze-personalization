@@ -14,7 +14,10 @@ def test_gain_matrix_preserves_suite_and_protocol_k_mapping():
         {"suite": "b", "protocol": "interleaved", "calibration_size": 20,
          "mean_gain_deg": 0.4},
     ]
-    suites, labels, matrix = build_gain_matrix(rows)
+    for index, row in enumerate(rows):
+        row["status"] = "PASS" if index % 2 == 0 else "FAIL"
+    suites, labels, matrix, passed = build_gain_matrix(rows)
     assert suites == ["a", "b"]
     assert labels == ["Chron.\nK=20", "Inter.\nK=20"]
     assert np.allclose(matrix, [[0.1, -0.2], [0.3, 0.4]])
+    assert passed.tolist() == [[True, False], [True, False]]

@@ -34,7 +34,7 @@
 | 个性化机制诊断 | 已完成 | 固定偏置具有正向迁移证据；无门控 SO(3)/affine 平均退化 |
 | 偏置可靠性收缩 | 已完成 | 2 参数不变；六个 protocol/K 组合均优于原 validation gate |
 | 无约束 checkpoint 外部验证 | 已完成、未通过 | 冻结公式的 6 个 protocol/K 配置全部平均退化 |
-| 研究发布准入检查 | 已完成 | 当前状态 FAIL；禁止宣称跨 checkpoint 普适 |
+| 研究发布准入检查 | 已完成 | 逐用户 bootstrap 单侧 95% 下界；36 项中 6 PASS、30 FAIL |
 | 一键研究审计 | 已完成 | 自动生成机制、归因、准入、输入/输出哈希与复现命令 |
 | 多 checkpoint 冻结验证 | 已完成 | 5 类外部 checkpoint 显示显著 checkpoint×protocol 交互 |
 | 校准内部可预测性 | 已完成、未通过 | leave-one-checkpoint-out 符号准确率 35.71%，0/6 套件优于均值基线 |

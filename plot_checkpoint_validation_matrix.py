@@ -12,7 +12,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def build_gain_matrix(rows: list[dict]) -> tuple[list[str], list[str], np.ndarray]:
+def build_gain_matrix(
+    rows: list[dict],
+) -> tuple[list[str], list[str], np.ndarray, np.ndarray]:
     suites = list(dict.fromkeys(row["suite"] for row in rows))
     columns = sorted({
         (row["protocol"], int(row["calibration_size"])) for row in rows
@@ -27,15 +29,28 @@ def build_gain_matrix(rows: list[dict]) -> tuple[list[str], list[str], np.ndarra
             float(row["mean_gain_deg"])
         for row in rows
     }
+    status_lookup = {
+        (row["suite"], row["protocol"], int(row["calibration_size"])):
+            row["status"] == "PASS"
+        for row in rows
+    }
     matrix = np.asarray([
         [lookup[(suite, protocol, size)] for protocol, size in columns]
         for suite in suites
     ])
-    return suites, labels, matrix
+    passed = np.asarray([
+        [status_lookup[(suite, protocol, size)] for protocol, size in columns]
+        for suite in suites
+    ])
+    return suites, labels, matrix, passed
 
 
 def plot_matrix(
-    suites: list[str], labels: list[str], matrix: np.ndarray, output_dir: Path
+    suites: list[str],
+    labels: list[str],
+    matrix: np.ndarray,
+    passed: np.ndarray,
+    output_dir: Path,
 ) -> None:
     limit = max(float(np.abs(matrix).max()), 0.01)
     figure, axis = plt.subplots(
@@ -52,8 +67,10 @@ def plot_matrix(
             value = matrix[row, column]
             color = "white" if abs(value) > limit * 0.55 else "black"
             axis.text(
-                column, row, f"{value:+.3f}", ha="center", va="center",
-                color=color, fontsize=9,
+                column, row,
+                f"{value:+.3f}\n{'PASS' if passed[row, column] else 'FAIL'}",
+                ha="center", va="center", color=color, fontsize=8,
+                fontweight="bold" if passed[row, column] else "normal",
             )
     colorbar = figure.colorbar(image, ax=axis, fraction=0.035, pad=0.03)
     colorbar.set_label("Baseline − personalized error (°)")
@@ -72,9 +89,9 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     report = json.loads(args.promotion_report.read_text())
-    suites, labels, matrix = build_gain_matrix(report["rows"])
+    suites, labels, matrix, passed = build_gain_matrix(report["rows"])
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    plot_matrix(suites, labels, matrix, args.output_dir)
+    plot_matrix(suites, labels, matrix, passed, args.output_dir)
     with (args.output_dir / "checkpoint_validation_matrix.csv").open(
         "w", newline="", encoding="utf-8"
     ) as handle:
@@ -83,6 +100,15 @@ def main() -> int:
         writer.writerows(
             [suite, *[f"{value:.9f}" for value in values]]
             for suite, values in zip(suites, matrix)
+        )
+    with (args.output_dir / "checkpoint_validation_status.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["suite", *labels])
+        writer.writerows(
+            [suite, *["PASS" if value else "FAIL" for value in values]]
+            for suite, values in zip(suites, passed)
         )
     print(
         f"Wrote {len(suites)} × {len(labels)} validation matrix to {args.output_dir}"
