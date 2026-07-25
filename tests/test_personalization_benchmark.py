@@ -7,6 +7,7 @@ from personalization_benchmark import (
     RotationAdapter,
     TangentAffineAdapter,
     fit_guarded_adapter,
+    find_feasible_split,
     rotation_matrix_from_vector,
     stratified_sample_indices,
 )
@@ -100,6 +101,46 @@ def test_guard_falls_back_for_inconsistent_rotation():
     )
     assert guard["selected_scale"] == 0.0
     assert torch.equal(adapter.rotation.detach(), torch.zeros(3))
+
+
+def test_reliability_gate_shrinks_unstable_bias_without_validation_labels():
+    torch.manual_seed(10)
+    angles = torch.empty(20, 2).uniform_(-0.2, 0.2)
+    predictions = angles_to_vector(angles)
+    offsets = torch.zeros_like(angles)
+    offsets[::2, 0] = math.radians(1.0)
+    offsets[1::2, 0] = math.radians(-1.0)
+    targets = angles_to_vector(angles + offsets)
+    adapter, guard = fit_guarded_adapter(
+        "bias", predictions, targets, steps=200, learning_rate=0.04,
+        regularization=0.0, max_bias_deg=10.0, max_linear_delta=0.25,
+        validation_fraction=0.25, min_validation_gain_deg=0.02,
+        gate_strategy="reliability",
+    )
+    assert guard["validation_count"] == 0
+    assert guard["parameter_instability_deg"] > 1.5
+    assert guard["selected_scale"] < 0.05
+    assert torch.linalg.vector_norm(adapter.bias) < math.radians(0.05)
+
+
+def test_feasible_split_falls_back_without_dropping_smaller_k():
+    calls = []
+
+    def split(records, pool_size, gap_segments):
+        calls.append(pool_size)
+        if pool_size > 20:
+            raise ValueError("too large")
+        return list(records[:pool_size]), list(records[pool_size:]), [0]
+
+    records = list(range(60))
+    result, feasible, skipped, errors = find_feasible_split(
+        records, [10, 20, 50], split, gap_segments=1
+    )
+    assert calls == [50, 20]
+    assert len(result[0]) == 20
+    assert feasible == [10, 20]
+    assert skipped == [50]
+    assert 50 in errors
 
 
 def test_subject_cv_folds_are_disjoint_and_cover_all_subjects():

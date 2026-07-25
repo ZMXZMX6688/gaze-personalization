@@ -239,10 +239,50 @@ def fit_guarded_adapter(
     max_linear_delta: float,
     validation_fraction: float,
     min_validation_gain_deg: float,
+    gate_strategy: str = "validation",
 ) -> Tuple[nn.Module, Dict[str, object]]:
     count = len(predictions)
     if count < 4:
         raise ValueError("Guarded calibration requires at least four samples")
+    if gate_strategy == "reliability":
+        if method != "bias":
+            raise ValueError("Reliability shrinkage is defined only for the bias adapter")
+        adapter = fit_adapter(
+            method, predictions, targets, steps, learning_rate, regularization,
+            max_bias_deg, max_linear_delta,
+        )
+        first = torch.arange(0, count, 2)
+        second = torch.arange(1, count, 2)
+        half_adapters = [
+            fit_adapter(
+                method, predictions[index], targets[index], steps, learning_rate,
+                regularization, max_bias_deg, max_linear_delta,
+            )
+            for index in (first, second)
+        ]
+        raw_parameters = snapshot_parameters(adapter)
+        difference_deg = float(torch.rad2deg(
+            half_adapters[0].bias.detach() - half_adapters[1].bias.detach()
+        ).norm())
+        magnitude_deg = float(torch.rad2deg(adapter.bias.detach()).norm())
+        noise_sq = difference_deg ** 2 / 4.0
+        scale = float(np.clip(
+            1.0 - noise_sq / max(magnitude_deg ** 2, 1e-12), 0.0, 1.0
+        ))
+        set_parameter_scale(adapter, raw_parameters, scale)
+        return adapter, {
+            "fit_count": count,
+            "validation_count": 0,
+            "selected_scale": scale,
+            "validation_base_mean_deg": float("nan"),
+            "validation_personalized_mean_deg": float("nan"),
+            "validation_gain_deg": float("nan"),
+            "parameter_instability_deg": difference_deg,
+            "parameter_magnitude_deg": magnitude_deg,
+            "parameters": serialize_parameters(adapter),
+        }
+    if gate_strategy != "validation":
+        raise ValueError(f"Unknown gate strategy: {gate_strategy}")
     validation_count = max(2, int(math.ceil(count * validation_fraction)))
     validation_count = min(validation_count, count - 2)
     fit_count = count - validation_count
@@ -285,6 +325,8 @@ def fit_guarded_adapter(
         "validation_base_mean_deg": base_validation_mean,
         "validation_personalized_mean_deg": candidate_means[best_scale],
         "validation_gain_deg": validation_gain,
+        "parameter_instability_deg": float("nan"),
+        "parameter_magnitude_deg": float("nan"),
         "parameters": serialize_parameters(adapter),
     }
 
@@ -295,6 +337,29 @@ def records_to_indices(
 ) -> List[int]:
     index = {record: position for position, record in enumerate(all_records)}
     return [index[record] for record in selected_records]
+
+
+def find_feasible_split(
+    records: Sequence[ClipRecord],
+    calibration_sizes: Sequence[int],
+    split_function,
+    gap_segments: int,
+    calibration_pool_size: int = 0,
+):
+    requested_pool_size = calibration_pool_size or max(calibration_sizes)
+    candidate_pool_sizes = [requested_pool_size]
+    if calibration_pool_size == 0:
+        candidate_pool_sizes = sorted(calibration_sizes, reverse=True)
+    errors = {}
+    for candidate_pool_size in candidate_pool_sizes:
+        try:
+            split = split_function(records, candidate_pool_size, gap_segments)
+            feasible = [size for size in calibration_sizes if size <= len(split[0])]
+            skipped = [size for size in calibration_sizes if size not in feasible]
+            return split, feasible, skipped, errors
+        except ValueError as error:
+            errors[candidate_pool_size] = str(error)
+    return None, [], list(calibration_sizes), errors
 
 
 def load_or_create_cache(
@@ -478,6 +543,9 @@ def main() -> None:
     parser.add_argument("--max-linear-delta", type=float, default=0.25)
     parser.add_argument("--calibration-validation-fraction", type=float, default=0.25)
     parser.add_argument("--min-calibration-gain-deg", type=float, default=0.02)
+    parser.add_argument("--gate-strategy", choices=("validation", "reliability"),
+                        default="validation",
+                        help="Reliability uses split-half parameter shrinkage and supports bias only")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--refresh-cache", action="store_true")
     args = parser.parse_args()
@@ -499,6 +567,8 @@ def main() -> None:
         parser.error("--gap-segments must be non-negative")
     if not 0.0 < args.calibration_validation_fraction < 1.0:
         parser.error("--calibration-validation-fraction must be between 0 and 1")
+    if args.gate_strategy == "reliability" and args.methods != ["bias"]:
+        parser.error("--gate-strategy reliability requires --methods bias")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -592,9 +662,32 @@ def main() -> None:
             records = [ClipRecord(**record) for record in payload["records"]]
             predictions = payload["predictions"].float()
             targets = payload["targets"].float()
-            calibration_pool, evaluation, calibration_segments = split_function(
-                records, max_calibration, args.gap_segments
+            split, feasible_calibration_sizes, skipped_calibration_sizes, split_errors = (
+                find_feasible_split(
+                    records,
+                    args.calibration_sizes,
+                    split_function,
+                    args.gap_segments,
+                    args.calibration_pool_size,
+                )
             )
+            if split is None:
+                split_manifest[protocol][sid] = {
+                    "status": "skipped",
+                    "indexed_clips": len(records),
+                    "feasible_calibration_sizes": [],
+                    "skipped_calibration_sizes": args.calibration_sizes,
+                    "reason": "; ".join(
+                        f"K={size}: {reason}" for size, reason in split_errors.items()
+                    ),
+                }
+                print(
+                    f"[skip] {protocol} {sid}: "
+                    f"{split_manifest[protocol][sid]['reason']}",
+                    flush=True,
+                )
+                continue
+            calibration_pool, evaluation, calibration_segments = split
             if args.max_eval_clips:
                 positions = np.linspace(
                     0, len(evaluation) - 1, args.max_eval_clips, dtype=np.int64
@@ -615,9 +708,11 @@ def main() -> None:
                 "evaluation": [asdict(record) for record in evaluation],
                 "calibration_segment_ids": calibration_segments,
                 "evaluation_segment_ids": sorted({record.segment_id for record in evaluation}),
+                "feasible_calibration_sizes": feasible_calibration_sizes,
+                "skipped_calibration_sizes": skipped_calibration_sizes,
             }
 
-            for calibration_size in args.calibration_sizes:
+            for calibration_size in feasible_calibration_sizes:
                 for repeat in range(args.repeats):
                     selection_seed = int(np.random.SeedSequence([
                         args.seed, protocol_index, sid_index, calibration_size, repeat
@@ -639,6 +734,7 @@ def main() -> None:
                             max_linear_delta=args.max_linear_delta,
                             validation_fraction=args.calibration_validation_fraction,
                             min_validation_gain_deg=args.min_calibration_gain_deg,
+                            gate_strategy=args.gate_strategy,
                         )
                         with torch.no_grad():
                             personalized_predictions = adapter(evaluation_predictions)
@@ -656,6 +752,9 @@ def main() -> None:
                             "calibration_fit_clips": guard["fit_count"],
                             "calibration_validation_clips": guard["validation_count"],
                             "adapter_scale": guard["selected_scale"],
+                            "gate_strategy": args.gate_strategy,
+                            "parameter_instability_deg": guard["parameter_instability_deg"],
+                            "parameter_magnitude_deg": guard["parameter_magnitude_deg"],
                             "calibration_validation_gain_deg": guard["validation_gain_deg"],
                             "base_mean_deg": base_metrics["mean"],
                             "base_median_deg": base_metrics["median"],
@@ -672,7 +771,7 @@ def main() -> None:
                         })
             print(
                 f"[sweep] {protocol} {sid}: eval={base_metrics['n']} "
-                f"rows={len(args.calibration_sizes) * args.repeats * len(args.methods)}",
+                f"rows={len(feasible_calibration_sizes) * args.repeats * len(args.methods)}",
                 flush=True,
             )
 

@@ -150,6 +150,17 @@ python3 personalization_benchmark.py \
   --repeats 20
 ```
 
+研究两参数偏置时，可用校准集分半重复性连续收缩参数：
+
+```bash
+python3 personalization_benchmark.py \
+  ... \
+  --methods bias \
+  --gate-strategy reliability
+```
+
+该策略不使用评测标签选择缩放量；输出中的 `parameter_instability_deg`、`parameter_magnitude_deg` 和 `adapter_scale` 分别记录分半参数差、偏置幅值和可靠性缩放。完整定义与五折对照见 [PERSONALIZATION_LOGIC.md](PERSONALIZATION_LOGIC.md)。
+
 输出文件包括：
 
 - `results.csv`：每位用户、每次重复的结果
@@ -201,7 +212,7 @@ Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通
 python3 -m pytest -q
 ```
 
-当前测试集包含 35 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、用户级交叉验证、GRU 隐状态布局、两种协议的 segment/frame 隔离、五折产物完整性审计，以及个性化机制诊断。
+当前测试集包含 40 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计，以及个性化机制诊断。
 
 五折训练结束后，可对 split、逐折 manifest 和结果表执行一致性审计：
 
