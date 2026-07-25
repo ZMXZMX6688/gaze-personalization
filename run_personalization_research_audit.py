@@ -16,12 +16,18 @@ from attribute_personalization_failure import (
     load_suite as load_attribution_suite,
     summarize as summarize_attribution,
 )
+from analyze_calibration_predictability import (
+    evaluate_leave_one_suite_out,
+    load_observations_from_suites,
+    overall_summary as summarize_predictability,
+)
 from personalization_mechanism_analysis import (
     analyze_result_dir,
     summarize as summarize_mechanisms,
 )
 from plot_checkpoint_validation_matrix import build_gain_matrix, plot_matrix
 from validate_personalization_promotion import validate_suites
+from research_suite_config import load_config, parse_suite
 
 
 def sha256(path: Path) -> str:
@@ -37,35 +43,6 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-
-
-def parse_suite(value: str) -> tuple[str, Path, list[Path]]:
-    try:
-        name, payload = value.split("=", 1)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            "Expected NAME=/benchmark/dir or NAME=/summary.json::/result/dir1,/result/dir2"
-        ) from error
-    if "::" in payload:
-        summary, result_dirs = payload.split("::", 1)
-        directories = [Path(item) for item in result_dirs.split(",") if item]
-        if not directories:
-            raise argparse.ArgumentTypeError("Suite must contain at least one result directory")
-        return name, Path(summary), directories
-    directory = Path(payload)
-    return name, directory / "summary.json", [directory]
-
-
-def load_config(path: Path) -> list[tuple[str, Path, list[Path]]]:
-    payload = json.loads(path.read_text())
-    return [
-        (
-            suite["name"],
-            Path(suite["summary_path"]),
-            [Path(value) for value in suite["result_dirs"]],
-        )
-        for suite in payload["suites"]
-    ]
 
 
 def git_commit(project_root: Path) -> str:
@@ -177,8 +154,8 @@ def main() -> int:
     write_csv(promotion_dir / "promotion_report.csv", promotion["rows"])
     figure_dir = args.output_dir / "figures"
     figure_dir.mkdir()
-    suites, labels, matrix = build_gain_matrix(promotion["rows"])
-    plot_matrix(suites, labels, matrix, figure_dir)
+    suite_labels, labels, matrix = build_gain_matrix(promotion["rows"])
+    plot_matrix(suite_labels, labels, matrix, figure_dir)
     with (figure_dir / "checkpoint_validation_matrix.csv").open(
         "w", newline="", encoding="utf-8"
     ) as handle:
@@ -186,8 +163,36 @@ def main() -> int:
         writer.writerow(["suite", *labels])
         writer.writerows(
             [suite, *[f"{value:.9f}" for value in values]]
-            for suite, values in zip(suites, matrix)
+            for suite, values in zip(suite_labels, matrix)
         )
+
+    calibration_observations = load_observations_from_suites(suites)
+    predictability_rows, predictability_folds = evaluate_leave_one_suite_out(
+        calibration_observations
+    )
+    predictability = summarize_predictability(
+        predictability_rows, predictability_folds
+    )
+    predictability_dir = args.output_dir / "predictability"
+    predictability_dir.mkdir()
+    write_csv(
+        predictability_dir / "calibration_observations.csv",
+        calibration_observations,
+    )
+    write_csv(
+        predictability_dir / "leave_one_suite_out_predictions.csv",
+        predictability_rows,
+    )
+    write_csv(
+        predictability_dir / "leave_one_suite_out_summary.csv",
+        predictability_folds,
+    )
+    (predictability_dir / "predictability_summary.json").write_text(
+        json.dumps(
+            {"summary": predictability, "folds": predictability_folds}, indent=2
+        ) + "\n",
+        encoding="utf-8",
+    )
 
     project_root = Path(__file__).resolve().parent
     manifest = {
@@ -208,6 +213,8 @@ def main() -> int:
                 sha256(figure_dir / "checkpoint_validation_matrix.csv"),
             "validation_matrix_svg_sha256":
                 sha256(figure_dir / "checkpoint_validation_matrix.svg"),
+            "predictability_summary_sha256":
+                sha256(predictability_dir / "predictability_summary.json"),
         },
     }
     (args.output_dir / "reproduction_manifest.json").write_text(

@@ -1,6 +1,7 @@
 import json
 
-from run_personalization_research_audit import load_config, parse_suite, sha256
+from research_suite_config import load_config, parse_suite
+from run_personalization_research_audit import sha256
 
 
 def test_sha256_is_stable_for_reproduction_inputs(tmp_path):
