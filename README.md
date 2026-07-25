@@ -199,7 +199,18 @@ Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通
 python3 -m pytest -q
 ```
 
-当前测试集包含 30 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、用户级交叉验证、GRU 隐状态布局，以及两种协议的 segment/frame 隔离。
+当前测试集包含 33 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、用户级交叉验证、GRU 隐状态布局、两种协议的 segment/frame 隔离，以及五折产物完整性审计。
+
+五折训练结束后，可对 split、逐折 manifest 和结果表执行一致性审计：
+
+```bash
+python3 audit_cv_integrity.py \
+  --split-json /path/to/cv5-folds-seed42.json \
+  --cv-dir /path/to/cv5 \
+  --output-dir /path/to/cv5/aggregate/audit
+```
+
+审计会验证每位用户恰好被分配到一个测试 fold、fold 内用户集合互斥、结果用户与 manifest 一致、校准/评测 segment 和 clip 无泄漏，并显式记录数据不足而跳过的用户。输出为 `integrity_audit.json` 和 `integrity_audit.csv`，发现错误时进程返回非零状态。
 
 ## 服务器与认证
 
