@@ -1,0 +1,22 @@
+{
+  "suites": [
+    {
+      "name": "constraint_cv5",
+      "summary_path": "/data1/luxliang/gaze-personalization/runs/reliability-bias-cv5-r10-v3-aggregate-20260726/summary.json",
+      "result_dirs": [
+        "/data1/luxliang/gaze-personalization/cv5/fold0-personalization",
+        "/data1/luxliang/gaze-personalization/cv5/fold1-personalization",
+        "/data1/luxliang/gaze-personalization/cv5/fold2-personalization",
+        "/data1/luxliang/gaze-personalization/cv5/fold3-personalization",
+        "/data1/luxliang/gaze-personalization/cv5/fold4-personalization"
+      ]
+    },
+    {
+      "name": "no_constraint_heldout6",
+      "summary_path": "/data1/luxliang/gaze-personalization/runs/reliability-bias-no-constraint-heldout6-r20-20260726/summary.json",
+      "result_dirs": [
+        "/data1/luxliang/gaze-personalization/runs/reliability-bias-no-constraint-heldout6-r20-20260726"
+      ]
+    }
+  ]
+}

@@ -179,3 +179,22 @@ d=\|b^{(1)}-b^{(2)}\|_2 .
 项目新增研究发布准入检查：指定的每个独立验证套件、协议和 K 均须达到最低 Gain，否则命令返回非零状态并生成失败表。本轮准入结果为 **FAIL（6 个配置失败）**：
 
 `/data1/luxliang/gaze-personalization/runs/reliability-bias-promotion-audit-20260726`
+
+## 8. 自动化研究审计
+
+`run_personalization_research_audit.py` 将以下步骤固定为同一条流水线：
+
+1. 从每个验证套件的逐折 manifest/cache 重新计算机制指标；
+2. 生成逐用户偏置运输分类和跨 checkpoint 失效归因；
+3. 从各套件独立 summary 执行发布准入；
+4. 记录代码 commit、Python/平台、输入 summary 与 manifest 哈希、输出哈希和唯一命令。
+
+当前服务器配置保存在 `research_audit_config.json`，执行命令为：
+
+```bash
+python3 run_personalization_research_audit.py \
+  --config research_audit_config.json \
+  --output-dir /new/output/directory
+```
+
+审计状态为 FAIL 时程序返回 1，但仍完整写出归因、准入和复现产物。状态失败表示研究结论不满足发布条件，不表示流水线运行异常。
