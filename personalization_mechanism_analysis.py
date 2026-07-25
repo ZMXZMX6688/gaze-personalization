@@ -219,8 +219,9 @@ def diagnose_model(
     return row
 
 
-def analyze_fold(fold_dir: Path, protocols: set[str]) -> list[dict[str, Any]]:
-    fold_id = int(fold_dir.name.split("-")[0].replace("fold", ""))
+def analyze_result_dir(
+    fold_dir: Path, protocols: set[str], fold_id: int
+) -> list[dict[str, Any]]:
     summary = json.loads((fold_dir / "summary.json").read_text())
     cache_dir = Path(summary["config"]["cache_dir"])
     manifest = json.loads((fold_dir / "split_manifest.json").read_text())
@@ -287,12 +288,22 @@ def main() -> int:
     parser.add_argument("--cv-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--protocols", default="chronological,interleaved")
+    parser.add_argument(
+        "--result-dirs",
+        type=lambda value: [Path(item) for item in value.split(",") if item],
+        default=None,
+        help="Explicit comma-separated benchmark result directories",
+    )
     args = parser.parse_args()
     protocols = {item.strip() for item in args.protocols.split(",") if item.strip()}
-    fold_dirs = sorted(args.cv_dir.glob("fold*-personalization"))
+    fold_dirs = args.result_dirs or sorted(args.cv_dir.glob("fold*-personalization"))
     if not fold_dirs:
         parser.error(f"No fold personalization directories in {args.cv_dir}")
-    rows = [row for fold_dir in fold_dirs for row in analyze_fold(fold_dir, protocols)]
+    rows = [
+        row
+        for fold_id, fold_dir in enumerate(fold_dirs)
+        for row in analyze_result_dir(fold_dir, protocols, fold_id)
+    ]
     summaries = summarize(rows)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_csv(args.output_dir / "mechanism_subjects.csv", rows)

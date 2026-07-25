@@ -149,3 +149,33 @@ d=\|b^{(1)}-b^{(2)}\|_2 .
 `/data1/luxliang/gaze-personalization/runs/reliability-bias-cv5-r10-v3-aggregate-20260726`
 
 该结论目前说明“参数重复性可用于改善补偿强度估计”。下一步仍需冻结公式，在新 checkpoint、设备或采集场景上做外部验证，不能继续依据当前五折结果调整公式常数。
+
+## 7. 冻结公式的 checkpoint 外部验证
+
+冻结第 6 节公式后，在无约束 checkpoint
+`bdb6e6ba054eb5f1e0d1fcb436b2bdda2eb09ef76c43e97fd9f2a71fd8e741a5`
+及固定 6 位留出用户上验证，未依据结果修改任何常数。
+
+| 协议 | K | 可靠性收缩 Gain |
+|---|---:|---:|
+| chronological | 10 | -0.0535° |
+| chronological | 20 | -0.0495° |
+| chronological | 50 | -0.0517° |
+| interleaved | 10 | -0.0293° |
+| interleaved | 20 | -0.0389° |
+| interleaved | 50 | -0.0322° |
+
+六个配置全部失败，因此可靠性偏置不能被表述为跨 checkpoint 普适方案。机制诊断显示，无约束 checkpoint 的校准偏置幅值约为 0.55°–0.57°，而评测 oracle 偏置仅约 0.32°；校准内部估计虽然稳定，却系统性高估可迁移补偿量。这说明：
+
+1. 分半可靠性只刻画校准抽样噪声；
+2. 它不能观测 checkpoint/context 引起的偏置衰减；
+3. “参数稳定”是个性化成立的必要条件，而非充分条件；
+4. 方法结论必须限定为当前约束训练路径，直至新场景独立验证通过。
+
+外部验证结果位于：
+
+`/data1/luxliang/gaze-personalization/runs/reliability-bias-no-constraint-heldout6-r20-20260726`
+
+项目新增研究发布准入检查：指定的每个独立验证套件、协议和 K 均须达到最低 Gain，否则命令返回非零状态并生成失败表。本轮准入结果为 **FAIL（6 个配置失败）**：
+
+`/data1/luxliang/gaze-personalization/runs/reliability-bias-promotion-audit-20260726`
