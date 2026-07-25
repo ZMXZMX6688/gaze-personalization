@@ -212,7 +212,7 @@ Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通
 python3 -m pytest -q
 ```
 
-当前测试集包含 46 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、失效归因、复现清单，以及跨 checkpoint 研究发布准入。
+当前测试集包含 47 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、失效归因、复现清单、验证矩阵可视化，以及跨 checkpoint 研究发布准入。
 
 候选个性化方案对多个独立套件验证后，可运行：
 
@@ -233,7 +233,7 @@ python3 run_personalization_research_audit.py \
   --output-dir /new/output/directory
 ```
 
-该命令统一生成机制诊断、失效归因、发布准入和带输入/输出 SHA-256 的复现清单。
+该命令统一生成机制诊断、失效归因、发布准入、checkpoint×protocol×K 的 SVG/PNG/CSV 验证矩阵，以及带输入/输出 SHA-256 的复现清单。
 
 五折训练结束后，可对 split、逐折 manifest 和结果表执行一致性审计：
 

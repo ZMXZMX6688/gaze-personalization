@@ -1,0 +1,20 @@
+import numpy as np
+
+from plot_checkpoint_validation_matrix import build_gain_matrix
+
+
+def test_gain_matrix_preserves_suite_and_protocol_k_mapping():
+    rows = [
+        {"suite": "a", "protocol": "chronological", "calibration_size": 20,
+         "mean_gain_deg": 0.1},
+        {"suite": "a", "protocol": "interleaved", "calibration_size": 20,
+         "mean_gain_deg": -0.2},
+        {"suite": "b", "protocol": "chronological", "calibration_size": 20,
+         "mean_gain_deg": 0.3},
+        {"suite": "b", "protocol": "interleaved", "calibration_size": 20,
+         "mean_gain_deg": 0.4},
+    ]
+    suites, labels, matrix = build_gain_matrix(rows)
+    assert suites == ["a", "b"]
+    assert labels == ["chronological\nK=20", "interleaved\nK=20"]
+    assert np.allclose(matrix, [[0.1, -0.2], [0.3, 0.4]])

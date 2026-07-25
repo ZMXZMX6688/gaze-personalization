@@ -20,6 +20,7 @@ from personalization_mechanism_analysis import (
     analyze_result_dir,
     summarize as summarize_mechanisms,
 )
+from plot_checkpoint_validation_matrix import build_gain_matrix, plot_matrix
 from validate_personalization_promotion import validate_suites
 
 
@@ -174,6 +175,19 @@ def main() -> int:
         json.dumps(promotion, indent=2) + "\n", encoding="utf-8"
     )
     write_csv(promotion_dir / "promotion_report.csv", promotion["rows"])
+    figure_dir = args.output_dir / "figures"
+    figure_dir.mkdir()
+    suites, labels, matrix = build_gain_matrix(promotion["rows"])
+    plot_matrix(suites, labels, matrix, figure_dir)
+    with (figure_dir / "checkpoint_validation_matrix.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["suite", *labels])
+        writer.writerows(
+            [suite, *[f"{value:.9f}" for value in values]]
+            for suite, values in zip(suites, matrix)
+        )
 
     project_root = Path(__file__).resolve().parent
     manifest = {
@@ -190,6 +204,10 @@ def main() -> int:
                 sha256(attribution_dir / "failure_attribution_summary.csv"),
             "promotion_report_sha256":
                 sha256(promotion_dir / "promotion_report.json"),
+            "validation_matrix_csv_sha256":
+                sha256(figure_dir / "checkpoint_validation_matrix.csv"),
+            "validation_matrix_svg_sha256":
+                sha256(figure_dir / "checkpoint_validation_matrix.svg"),
         },
     }
     (args.output_dir / "reproduction_manifest.json").write_text(
