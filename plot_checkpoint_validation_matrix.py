@@ -17,7 +17,11 @@ def build_gain_matrix(rows: list[dict]) -> tuple[list[str], list[str], np.ndarra
     columns = sorted({
         (row["protocol"], int(row["calibration_size"])) for row in rows
     })
-    labels = [f"{protocol}\nK={size}" for protocol, size in columns]
+    protocol_labels = {"chronological": "Chron.", "interleaved": "Inter."}
+    labels = [
+        f"{protocol_labels.get(protocol, protocol)}\nK={size}"
+        for protocol, size in columns
+    ]
     lookup = {
         (row["suite"], row["protocol"], int(row["calibration_size"])):
             float(row["mean_gain_deg"])

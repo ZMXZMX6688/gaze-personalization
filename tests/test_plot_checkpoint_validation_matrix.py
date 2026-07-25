@@ -16,5 +16,5 @@ def test_gain_matrix_preserves_suite_and_protocol_k_mapping():
     ]
     suites, labels, matrix = build_gain_matrix(rows)
     assert suites == ["a", "b"]
-    assert labels == ["chronological\nK=20", "interleaved\nK=20"]
+    assert labels == ["Chron.\nK=20", "Inter.\nK=20"]
     assert np.allclose(matrix, [[0.1, -0.2], [0.3, 0.4]])
