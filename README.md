@@ -2,7 +2,7 @@
 
 本项目研究一个实际问题：同一个 3D 视线估计模型面对不同用户时，眼球结构、注视习惯和拍摄条件会带来个人误差。项目先训练一个适用于全部用户的通用模型，再用新用户少量带标签的校准片段拟合轻量适配器，从而降低该用户的视线角误差。
 
-研究主线、适配器参数含义、正交性、偏差定义和机制诊断见 [PERSONALIZATION_LOGIC.md](PERSONALIZATION_LOGIC.md)。任何“个性化有效”的结论必须先通过偏差存在性、跨片段稳定性和补偿可辨识性检验，再讨论带门控的最终效果。
+研究主线、适配器参数含义、正交性、偏差定义和机制诊断见 [PERSONALIZATION_LOGIC.md](PERSONALIZATION_LOGIC.md)。任何“个性化有效”的结论必须先通过偏差存在性、跨片段稳定性和补偿可辨识性检验，再讨论带门控的最终效果。最新分量消融表明，两参数 bias 的可迁移信号主要来自 pitch，yaw 尚无跨套件可靠证据。
 
 当前实验基于 **TEyeD 完整导出数据**，共包含 56 个用户。主模型为 ResNet18-GRU，输入眼部视频片段，输出三维视线方向。
 
@@ -212,7 +212,15 @@ Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通
 python3 -m pytest -q
 ```
 
-当前测试集包含 49 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、失效归因、复现清单、验证矩阵可视化、校准可预测性，以及带逐用户 bootstrap 下界的跨 checkpoint 研究发布准入。
+当前测试集包含 52 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、yaw/pitch 分量隔离、失效归因、复现清单、验证矩阵可视化、校准可预测性，以及带逐用户 bootstrap 下界的跨 checkpoint 研究发布准入。
+
+重评估已经拟合的 bias 分量：
+
+```bash
+python3 analyze_bias_components.py \
+  --config research_audit_config.json \
+  --output-dir /path/to/bias-component-ablation
+```
 
 候选个性化方案对多个独立套件验证后，可运行：
 

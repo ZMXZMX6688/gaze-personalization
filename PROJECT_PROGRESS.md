@@ -38,6 +38,7 @@
 | 一键研究审计 | 已完成 | 自动生成机制、归因、准入、输入/输出哈希与复现命令 |
 | 多 checkpoint 冻结验证 | 已完成 | 5 类外部 checkpoint 显示显著 checkpoint×protocol 交互 |
 | 校准内部可预测性 | 已完成、未通过 | leave-one-checkpoint-out 符号准确率 35.71%，0/6 套件优于均值基线 |
+| yaw/pitch 分量消融 | 已完成 | pitch-only 23/36 配置均值为正；yaw-only 仅 3/36，且 0/36 置信下界为正 |
 | 无约束模型五折对照 | 待启动 | 使用相同 fold 划分建立更强通用基线 |
 | Main Sequence | 研究分支 | 60 fps 数据上的拟合信号较弱，面向后续高帧率数据 |
 
@@ -56,6 +57,7 @@
 - 当前最稳定的时间外推改善为 **0.0672°**，来自约束版通用模型加 chronological affine。
 - 个性化收益会随通用 checkpoint 改变。无约束版在 chronological affine K=20 时误差增加约 0.0695°。
 - 每项结论都需要同时报告 Baseline、Personalized 和 Gain。
+- 两参数 bias 的跨套件可迁移收益主要由 pitch 提供；yaw 目前应视为未识别的噪声分量。
 - 以上数值属于固定 6 用户实验，56 用户总体结果等待五折 aggregate 完成。
 
 chronological affine 的 K 扫描显示：K≥15 后 Gain 的 5% 分位数保持为正，K=40 当前兼顾误差与重复稳定性。K=40 的 100 次确认实验得到：
