@@ -307,3 +307,27 @@ K、重复次数和随机种子重新拟合，并与原两参数 bias 逐用户�
 产物位于：
 
 `/data1/luxliang/gaze-personalization/runs/pitch-bias-candidate-20260726`
+
+## 13. pitch 偏差的校准—评估运输机制
+
+对 504 个“套件×协议×K×用户”配置，比较校准期学到的 pitch 参数与隔离评估期
+oracle pitch 残差。oracle 仅用于离线归因，未参与拟合、缩放或方案选择。
+
+| 机制指标 | 结果 |
+|---|---:|
+| pitch 符号一致率 | 75.74% |
+| 符号一致时平均 Gain | +0.0553° |
+| 符号不一致时平均 Gain | -0.0341° |
+| Gain 与绝对运输漂移相关 | -0.319 |
+| Gain 与符号一致性相关 | +0.369 |
+
+因此“实现个性化”的中间环节可明确写为：校准数据识别用户 pitch 残差，可靠性收缩
+控制估计噪声，只有该残差在隔离评估期保持方向且幅值不过度漂移时，补偿才产生正收益。
+失败场景不是简单的适配器容量不足，而是偏差没有跨时间/协议/checkpoint 运输。
+
+这组结果不能转化为使用评估 oracle 的在线 gate。下一阶段必须寻找部署时可观测的
+context transport 变量，或在目标 checkpoint/protocol 上预先完成独立用户准入。
+
+产物位于：
+
+`/data1/luxliang/gaze-personalization/runs/pitch-transport-attribution-20260726`
