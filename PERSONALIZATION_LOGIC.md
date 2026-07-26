@@ -248,3 +248,46 @@ python3 run_personalization_research_audit.py \
 2. 未通过发布准入的 checkpoint/protocol 禁止启用个性化；
 3. 单个用户的可靠性收缩只在已通过准入的组合内控制估计噪声；
 4. 若要实现真正在线 gate，需要引入当前校准数据之外、能够观测 context transport 的信息。
+
+## 11. 两参数偏置的分量可辨识性
+
+为回答“两参数适配器究竟学到了什么”，固定每次校准已经拟合并经过可靠性收缩的
+\([b_{\mathrm{yaw}},b_{\mathrm{pitch}}]\)，在同一隔离评测集上比较四种处理：
+
+1. zero：不补偿；
+2. yaw-only：\([b_{\mathrm{yaw}},0]\)；
+3. pitch-only：\([0,b_{\mathrm{pitch}}]\)；
+4. full：\([b_{\mathrm{yaw}},b_{\mathrm{pitch}}]\)。
+
+该消融不重新拟合参数，也不使用评测标签做选择。统计先对同一用户的重复抽样取均值，
+再对用户做宏平均；full 与单分量的差值使用逐用户配对 bootstrap。六套 checkpoint、
+两种协议、K∈{10,20,50} 共形成 36 个配置、21,600 条分量重评估记录。full 重算与原始
+结果的最大差为 0.0002534°。
+
+| 分量或比较 | 均值为正的配置 | 单侧 95% 下界为正 | 36 配置宏平均 |
+|---|---:|---:|---:|
+| yaw-only | 3 / 36 | 0 / 36 | -0.0261° |
+| pitch-only | 23 / 36 | 13 / 36 | +0.0202° |
+| full | 17 / 36 | 6 / 36 | -0.0029° |
+| full − yaw-only（加入 pitch） | 24 / 36 | 16 / 36 | +0.0233° |
+| full − pitch-only（加入 yaw） | 6 / 36 | 0 / 36 | -0.0230° |
+
+因此当前数据不支持“yaw/pitch 两个个性化参数均被可靠识别”。可迁移信号主要来自
+pitch；yaw 分量跨 checkpoint 总体损害泛化。两参数 full 在约束版五折上有效，不能
+解释为两个方向都实现了个性化，而应解释为 pitch 信号足以覆盖 yaw 噪声的条件性结果。
+
+下一轮候选应是预先声明的一参数 pitch-only 补偿，并在新的独立用户或 checkpoint 上
+完整重跑拟合、稳定性和发布准入。当前分量消融只能提出该假设，不能用同一批评测结果
+直接把 pitch-only 宣布为已验证方案。
+
+复现命令：
+
+```bash
+python3 analyze_bias_components.py \
+  --config research_audit_config.json \
+  --output-dir /path/to/bias-component-ablation
+```
+
+正式产物位于：
+
+`/data1/luxliang/gaze-personalization/runs/bias-component-ablation-f2cb907`
