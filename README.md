@@ -2,6 +2,8 @@
 
 本项目研究一个实际问题：同一个 3D 视线估计模型面对不同用户时，眼球结构、注视习惯和拍摄条件会带来个人误差。项目先训练一个适用于全部用户的通用模型，再用新用户少量带标签的校准片段拟合轻量适配器，从而降低该用户的视线角误差。
 
+研究主线、适配器参数含义、正交性、偏差定义和机制诊断见 [PERSONALIZATION_LOGIC.md](PERSONALIZATION_LOGIC.md)。任何“个性化有效”的结论必须先通过偏差存在性、跨片段稳定性和补偿可辨识性检验，再讨论带门控的最终效果。
+
 当前实验基于 **TEyeD 完整导出数据**，共包含 56 个用户。主模型为 ResNet18-GRU，输入眼部视频片段，输出三维视线方向。
 
 新同学参与项目时，可先阅读 [PROJECT_PROGRESS.md](PROJECT_PROGRESS.md)，其中包含实时实验状态、服务器目录、待认领任务和协作规范。
@@ -148,6 +150,17 @@ python3 personalization_benchmark.py \
   --repeats 20
 ```
 
+研究两参数偏置时，可用校准集分半重复性连续收缩参数：
+
+```bash
+python3 personalization_benchmark.py \
+  ... \
+  --methods bias \
+  --gate-strategy reliability
+```
+
+该策略不使用评测标签选择缩放量；输出中的 `parameter_instability_deg`、`parameter_magnitude_deg` 和 `adapter_scale` 分别记录分半参数差、偏置幅值和可靠性缩放。完整定义与五折对照见 [PERSONALIZATION_LOGIC.md](PERSONALIZATION_LOGIC.md)。
+
 输出文件包括：
 
 - `results.csv`：每位用户、每次重复的结果
@@ -199,7 +212,39 @@ Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通
 python3 -m pytest -q
 ```
 
-当前测试集包含 30 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、用户级交叉验证、GRU 隐状态布局，以及两种协议的 segment/frame 隔离。
+当前测试集包含 49 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、失效归因、复现清单、验证矩阵可视化、校准可预测性，以及带逐用户 bootstrap 下界的跨 checkpoint 研究发布准入。
+
+候选个性化方案对多个独立套件验证后，可运行：
+
+```bash
+python3 validate_personalization_promotion.py \
+  --suite cv5=/path/to/cv5/summary.json \
+  --suite external=/path/to/external/summary.json \
+  --output-dir /path/to/promotion-audit
+```
+
+任一指定配置的平均 Gain 或逐用户 bootstrap 单侧 95% 下界低于阈值时，检查返回非零状态，防止把少量用户驱动的正均值误写成普适结论。
+
+完整研究审计可直接运行：
+
+```bash
+python3 run_personalization_research_audit.py \
+  --config research_audit_config.json \
+  --output-dir /new/output/directory
+```
+
+该命令统一生成机制诊断、失效归因、发布准入、checkpoint×protocol×K 的 SVG/PNG/CSV 验证矩阵，以及带输入/输出 SHA-256 的复现清单。
+
+五折训练结束后，可对 split、逐折 manifest 和结果表执行一致性审计：
+
+```bash
+python3 audit_cv_integrity.py \
+  --split-json /path/to/cv5-folds-seed42.json \
+  --cv-dir /path/to/cv5 \
+  --output-dir /path/to/cv5/aggregate/audit
+```
+
+审计会验证每位用户恰好被分配到一个测试 fold、fold 内用户集合互斥、结果用户与 manifest 一致、校准/评测 segment 和 clip 无泄漏，并显式记录数据不足而跳过的用户。输出为 `integrity_audit.json` 和 `integrity_audit.csv`，发现错误时进程返回非零状态。
 
 ## 服务器与认证
 

@@ -18,6 +18,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cv-root", type=Path, required=True)
     parser.add_argument("--folds", type=int, default=5)
+    parser.add_argument(
+        "--fold-dirs",
+        type=lambda value: [Path(item) for item in value.split(",") if item],
+        default=None,
+        help="Explicit comma-separated fold result directories",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     args = parser.parse_args()
 
@@ -26,8 +32,12 @@ def main() -> None:
     rows: List[Dict[str, object]] = []
     fold_configs = []
     test_subjects = []
-    for fold in range(args.folds):
-        fold_dir = args.cv_root / f"fold{fold}-personalization"
+    fold_dirs = args.fold_dirs or [
+        args.cv_root / f"fold{fold}-personalization" for fold in range(args.folds)
+    ]
+    if len(fold_dirs) != args.folds:
+        parser.error(f"--fold-dirs must contain exactly {args.folds} directories")
+    for fold, fold_dir in enumerate(fold_dirs):
         results_path = fold_dir / "results.csv"
         summary_path = fold_dir / "summary.json"
         if not results_path.is_file() or not summary_path.is_file():
