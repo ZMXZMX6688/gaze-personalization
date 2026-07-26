@@ -44,7 +44,7 @@ from personalize_from_universal import (
 )
 
 
-METHODS = ("bias", "rotation", "affine")
+METHODS = ("bias", "pitch_bias", "rotation", "affine")
 PROTOCOLS = ("chronological", "interleaved")
 SCALE_CANDIDATES = (0.0, 0.25, 0.5, 0.75, 1.0)
 WIN_THRESHOLD_DEG = 1e-3
@@ -111,6 +111,29 @@ class RotationAdapter(nn.Module):
 
     def regularization_loss(self) -> torch.Tensor:
         return (self.rotation / self.max_rotation_rad).square().mean()
+
+
+class PitchBiasAdapter(nn.Module):
+    """One-parameter adapter that leaves yaw unchanged."""
+
+    def __init__(self, max_bias_deg: float = 10.0):
+        super().__init__()
+        self.pitch_bias = nn.Parameter(torch.zeros((), dtype=torch.float32))
+        self.max_bias_rad = math.radians(max_bias_deg)
+
+    def forward(self, vectors: torch.Tensor) -> torch.Tensor:
+        angles = vector_to_angles(vectors)
+        adapted = torch.stack(
+            (angles[..., 0], angles[..., 1] + self.pitch_bias), dim=-1
+        )
+        return angles_to_vector(adapted)
+
+    def clamp_(self) -> None:
+        with torch.no_grad():
+            self.pitch_bias.clamp_(-self.max_bias_rad, self.max_bias_rad)
+
+    def regularization_loss(self) -> torch.Tensor:
+        return (self.pitch_bias / self.max_bias_rad).square()
 
 
 class TangentAffineAdapter(nn.Module):
@@ -184,7 +207,9 @@ def fit_adapter(
             regularization=regularization,
             max_bias_deg=max_bias_deg,
         )
-    if method == "rotation":
+    if method == "pitch_bias":
+        adapter = PitchBiasAdapter(max_bias_deg=max_bias_deg)
+    elif method == "rotation":
         adapter = RotationAdapter(max_rotation_deg=max_bias_deg)
     elif method == "affine":
         adapter = TangentAffineAdapter(
@@ -221,7 +246,7 @@ def serialize_parameters(adapter: nn.Module) -> Dict[str, object]:
     payload: Dict[str, object] = {}
     for name, parameter in adapter.named_parameters():
         values = parameter.detach().cpu()
-        if name in {"bias", "rotation"}:
+        if name in {"bias", "rotation", "pitch_bias"}:
             values = torch.rad2deg(values)
             name = f"{name}_deg"
         payload[name] = values.tolist()
@@ -245,8 +270,10 @@ def fit_guarded_adapter(
     if count < 4:
         raise ValueError("Guarded calibration requires at least four samples")
     if gate_strategy == "reliability":
-        if method != "bias":
-            raise ValueError("Reliability shrinkage is defined only for the bias adapter")
+        if method not in {"bias", "pitch_bias"}:
+            raise ValueError(
+                "Reliability shrinkage is defined only for bias adapters"
+            )
         adapter = fit_adapter(
             method, predictions, targets, steps, learning_rate, regularization,
             max_bias_deg, max_linear_delta,
@@ -261,10 +288,16 @@ def fit_guarded_adapter(
             for index in (first, second)
         ]
         raw_parameters = snapshot_parameters(adapter)
-        difference_deg = float(torch.rad2deg(
-            half_adapters[0].bias.detach() - half_adapters[1].bias.detach()
-        ).norm())
-        magnitude_deg = float(torch.rad2deg(adapter.bias.detach()).norm())
+        parameter_name = "bias" if method == "bias" else "pitch_bias"
+        difference_deg = float(
+            torch.rad2deg(
+                getattr(half_adapters[0], parameter_name).detach()
+                - getattr(half_adapters[1], parameter_name).detach()
+            ).norm()
+        )
+        magnitude_deg = float(
+            torch.rad2deg(getattr(adapter, parameter_name).detach()).norm()
+        )
         noise_sq = difference_deg ** 2 / 4.0
         scale = float(np.clip(
             1.0 - noise_sq / max(magnitude_deg ** 2, 1e-12), 0.0, 1.0
@@ -567,8 +600,13 @@ def main() -> None:
         parser.error("--gap-segments must be non-negative")
     if not 0.0 < args.calibration_validation_fraction < 1.0:
         parser.error("--calibration-validation-fraction must be between 0 and 1")
-    if args.gate_strategy == "reliability" and args.methods != ["bias"]:
-        parser.error("--gate-strategy reliability requires --methods bias")
+    if args.gate_strategy == "reliability" and not set(args.methods) <= {
+        "bias",
+        "pitch_bias",
+    }:
+        parser.error(
+            "--gate-strategy reliability supports only bias and pitch_bias"
+        )
 
     random.seed(args.seed)
     np.random.seed(args.seed)
