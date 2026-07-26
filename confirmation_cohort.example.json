@@ -1,0 +1,6 @@
+{
+  "confirmation_id": "replace-with-immutable-experiment-id",
+  "subject_ids": ["NEW_SUBJECT_001", "NEW_SUBJECT_002"],
+  "checkpoint_sha256": "replace-with-64-character-checkpoint-sha256",
+  "device_family": "replace-with-capture-device-family"
+}

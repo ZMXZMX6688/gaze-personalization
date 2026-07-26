@@ -265,13 +265,33 @@ Main Sequence 描述眼跳幅度与峰值速度之间的关系。可靠拟合通
 python3 -m pytest -q
 ```
 
-当前测试集包含 59 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、yaw/pitch 分量隔离、pitch 运输归因、冻结确认协议、失效归因、复现清单、验证矩阵可视化、校准可预测性，以及带逐用户 bootstrap 下界的跨 checkpoint 研究发布准入。
+当前测试集包含 63 个测试，覆盖适配器恒等初始化、SO(3)/affine 恢复、门控回退、可靠性收缩、用户级交叉验证、GRU 隐状态布局、协议可行性回退、segment/frame 隔离、五折产物完整性审计、个性化机制诊断、yaw/pitch 分量隔离、pitch 运输归因、冻结确认协议、外部队列重叠阻断、失效归因、复现清单、验证矩阵可视化、校准可预测性，以及带逐用户 bootstrap 下界的跨 checkpoint 研究发布准入。
 
 外部确认实验开始前必须校验冻结协议：
 
 ```bash
 python3 validate_confirmation_protocol.py confirmation_protocol.json
 ```
+
+然后复制并填写 `confirmation_cohort.example.json`，生成不可变启动锁：
+
+```bash
+python3 prepare_confirmation_run.py \
+  --protocol confirmation_protocol.json \
+  --selection-manifest candidate_selection_manifest.json \
+  --cohort /path/to/new_confirmation_cohort.json \
+  --output /path/to/run/confirmation_lock.json
+```
+
+启动器会自动执行以下阻断：
+
+- 新队列 SID 与候选筛选阶段 56 位用户有任何重叠；
+- 新队列存在重复或空 SID；
+- checkpoint 和采集设备均已在候选筛选阶段出现；
+- 冻结协议的参数量、评估隔离或 bootstrap 准入规则被修改。
+
+锁文件保存协议、历史选择集和外部队列的 SHA-256 指纹，以及协议和队列快照。正式结果
+必须携带该锁文件；缺失锁文件的运行只能标记为探索性实验。
 
 一旦外部数据被访问，`confirmation_protocol.json` 中列出的候选参数、K、协议、可靠性
 公式和准入阈值不得根据结果修改。若必须修改，应将本轮标记为探索性实验，并重新取得
