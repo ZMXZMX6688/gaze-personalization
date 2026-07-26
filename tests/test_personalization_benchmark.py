@@ -4,6 +4,7 @@ import torch
 
 from make_subject_cv_folds import make_subject_cv_folds
 from personalization_benchmark import (
+    PitchBiasAdapter,
     RotationAdapter,
     TangentAffineAdapter,
     fit_guarded_adapter,
@@ -11,7 +12,11 @@ from personalization_benchmark import (
     rotation_matrix_from_vector,
     stratified_sample_indices,
 )
-from personalize_from_universal import angles_to_vector, angular_errors_deg
+from personalize_from_universal import (
+    angles_to_vector,
+    angular_errors_deg,
+    vector_to_angles,
+)
 
 
 def test_stratified_sampling_is_reproducible_and_unique():
@@ -121,6 +126,39 @@ def test_reliability_gate_shrinks_unstable_bias_without_validation_labels():
     assert guard["parameter_instability_deg"] > 1.5
     assert guard["selected_scale"] < 0.05
     assert torch.linalg.vector_norm(adapter.bias) < math.radians(0.05)
+
+
+def test_pitch_bias_has_exactly_one_parameter_and_keeps_yaw_fixed():
+    adapter = PitchBiasAdapter()
+    assert sum(parameter.numel() for parameter in adapter.parameters()) == 1
+    angles = torch.tensor([[0.2, -0.1], [-0.3, 0.05]])
+    with torch.no_grad():
+        adapter.pitch_bias.copy_(torch.tensor(math.radians(2.0)))
+    adapted = vector_to_angles(adapter(angles_to_vector(angles)))
+    assert torch.allclose(adapted[:, 0], angles[:, 0], atol=1e-6)
+    assert torch.allclose(
+        adapted[:, 1], angles[:, 1] + math.radians(2.0), atol=1e-6
+    )
+
+
+def test_pitch_reliability_uses_scalar_instability():
+    torch.manual_seed(11)
+    angles = torch.empty(20, 2).uniform_(-0.2, 0.2)
+    predictions = angles_to_vector(angles)
+    offsets = torch.zeros_like(angles)
+    offsets[::2, 1] = math.radians(1.0)
+    offsets[1::2, 1] = math.radians(-1.0)
+    targets = angles_to_vector(angles + offsets)
+    adapter, guard = fit_guarded_adapter(
+        "pitch_bias", predictions, targets, steps=200, learning_rate=0.04,
+        regularization=0.0, max_bias_deg=10.0, max_linear_delta=0.25,
+        validation_fraction=0.25, min_validation_gain_deg=0.02,
+        gate_strategy="reliability",
+    )
+    assert guard["validation_count"] == 0
+    assert guard["parameter_instability_deg"] > 1.5
+    assert guard["selected_scale"] < 0.05
+    assert abs(float(adapter.pitch_bias)) < math.radians(0.05)
 
 
 def test_feasible_split_falls_back_without_dropping_smaller_k():

@@ -39,6 +39,7 @@
 | 多 checkpoint 冻结验证 | 已完成 | 5 类外部 checkpoint 显示显著 checkpoint×protocol 交互 |
 | 校准内部可预测性 | 已完成、未通过 | leave-one-checkpoint-out 符号准确率 35.71%，0/6 套件优于均值基线 |
 | yaw/pitch 分量消融 | 已完成 | pitch-only 23/36 配置均值为正；yaw-only 仅 3/36，且 0/36 置信下界为正 |
+| 一参数 pitch-only 复验 | 已完成、候选 | 22/36 均值为正、16/36 下界为正；相对两参数 bias 在 28/36 改善 |
 | 无约束模型五折对照 | 待启动 | 使用相同 fold 划分建立更强通用基线 |
 | Main Sequence | 研究分支 | 60 fps 数据上的拟合信号较弱，面向后续高帧率数据 |
 

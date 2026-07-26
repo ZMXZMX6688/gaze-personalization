@@ -291,3 +291,19 @@ python3 analyze_bias_components.py \
 正式产物位于：
 
 `/data1/luxliang/gaze-personalization/runs/bias-component-ablation-f2cb907`
+
+## 12. 一参数 pitch-only 候选复验
+
+依据分量消融预先定义 `pitch_bias`：唯一可训练参数为 pitch 角偏置，yaw 恒为零；可靠性
+收缩使用 pitch 标量的分半差和标量幅值。沿用六套实验的 checkpoint、用户划分、协议、
+K、重复次数和随机种子重新拟合，并与原两参数 bias 逐用户配对。
+
+36 个配置中，pitch-only 有 22 个平均 Gain 为正、16 个单侧 95% bootstrap 下界为正；
+相对两参数 bias 有 28 个平均改善、16 个改善下界为正。它显著减少了 yaw 噪声，但没有
+消除场景依赖：PIR two-stage 仍退化，约束五折也存在退化 fold。因此该方案升级为
+“更可辨识的候选”，尚未成为普适方案；必须在未参与本轮筛选的新用户/新 checkpoint
+上冻结验证。
+
+产物位于：
+
+`/data1/luxliang/gaze-personalization/runs/pitch-bias-candidate-20260726`
