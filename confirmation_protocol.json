@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "status": "frozen_before_external_confirmation",
+  "candidate": {
+    "method": "pitch_bias",
+    "trainable_parameter_count": 1,
+    "parameter_name": "pitch_bias",
+    "yaw_is_fixed_zero": true,
+    "max_absolute_bias_deg": 10.0,
+    "regularization": 0.001
+  },
+  "calibration": {
+    "sizes": [10, 20, 50],
+    "protocols": ["chronological", "interleaved"],
+    "repeats": 10,
+    "gate_strategy": "reliability",
+    "uses_evaluation_labels": false
+  },
+  "evaluation": {
+    "subject_disjoint": true,
+    "segment_frame_isolation": true,
+    "primary_metric": "subject_macro_mean_gain_deg",
+    "confidence_level": 0.95,
+    "bootstrap_repeats": 10000,
+    "minimum_gain_deg": 0.0,
+    "all_prespecified_configurations_must_pass": true
+  },
+  "novelty_requirement": {
+    "must_not_reuse_candidate_selection_subjects": true,
+    "must_include_unseen_checkpoint_or_device": true
+  },
+  "prohibited_after_data_access": [
+    "change_adapter_parameterization",
+    "change_reliability_formula",
+    "change_protocol_or_calibration_sizes",
+    "exclude_failed_subjects",
+    "select_checkpoint_by_evaluation_gain"
+  ]
+}
